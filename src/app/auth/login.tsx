@@ -4,12 +4,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, type Href } from 'expo-router';
 import React, { useState } from 'react';
 import {
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -26,7 +26,7 @@ export default function LoginScreen() {
 
   // Navegacion temporal al home; aqui luego puedes validar credenciales reales.
   const handleLogin = () => {
-    router.replace('/home' as Href);
+    router.replace('/formularios/form01' as Href);
   };
 
   return (

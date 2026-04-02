@@ -3,13 +3,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, type Href } from 'expo-router';
 import React, { useState } from 'react';
 import {
-	Pressable,
-	ScrollView,
-	StyleSheet,
-	Text,
-	TextInput,
-	TouchableOpacity,
-	View,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -28,6 +28,10 @@ export default function RegisterScreen() {
 
 	const goToLogin = () => {
 		router.replace('/auth/login' as Href);
+	};
+
+	const goToFirstForm = () => {
+		router.replace('/formularios/form01' as Href);
 	};
 
 	return (
@@ -148,7 +152,7 @@ export default function RegisterScreen() {
 							</View>
 						</View>
 
-						<Pressable style={styles.buttonShadow}>
+						<Pressable style={styles.buttonShadow} onPress={goToFirstForm}>
 							<LinearGradient colors={['#ecb607', '#f6c510', '#fbd232']} style={styles.button}>
 								<Text style={styles.buttonText}>Crear Cuenta</Text>
 							</LinearGradient>
