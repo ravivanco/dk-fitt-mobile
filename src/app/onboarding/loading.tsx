@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -75,7 +76,13 @@ export default function LoadingScreen() {
     outputRange: [0.96, 1.04],
   });
 
-  const handleStart = () => {
+  const handleStart = async () => {
+    try {
+      await AsyncStorage.setItem('dkfit.planActive', 'true');
+    } catch {
+      // Continue navigation even if storage fails.
+    }
+
     router.replace('/home');
   };
 

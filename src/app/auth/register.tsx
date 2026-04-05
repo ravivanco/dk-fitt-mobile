@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, type Href } from 'expo-router';
 import React, { useState } from 'react';
@@ -30,7 +31,16 @@ export default function RegisterScreen() {
 		router.replace('/auth/login' as Href);
 	};
 
-	const goToFirstForm = () => {
+	const goToFirstForm = async () => {
+		const safeName = name.trim().length > 0 ? name.trim() : 'Usuario';
+
+		try {
+			await AsyncStorage.setItem('dkfit.userName', safeName);
+			await AsyncStorage.setItem('dkfit.planActive', 'false');
+		} catch {
+			// Continue navigation even if storage fails.
+		}
+
 		router.replace('/formularios/form01' as Href);
 	};
 

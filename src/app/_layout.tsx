@@ -8,7 +8,7 @@ export default function RootLayout() {
 
 	return (
 		<ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-			<Stack screenOptions={{ headerShown: false }}>
+			<Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#f8f6f1' } }}>
 				<Stack.Screen name="auth/login" />
 				<Stack.Screen name="auth/register" />
 				<Stack.Screen name="formularios/form01" />
@@ -20,6 +20,9 @@ export default function RootLayout() {
 				<Stack.Screen name="formularios/form07" />
 				<Stack.Screen name="onboarding/loading" />
 				<Stack.Screen name="home" />
+				<Stack.Screen name="mi-plan" />
+				<Stack.Screen name="calendario" />
+				<Stack.Screen name="perfil" />
 			</Stack>
 		</ThemeProvider>
 	);
