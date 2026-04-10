@@ -2,10 +2,13 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, type Href } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from './components/form-background-decor';
+import { useOnboarding } from '../../context/onboarding-context';
+import { profileService } from '../../services/profile.service';
+import { authStore } from '../../store/auth.store';
 
 const { width } = Dimensions.get('window');
 
@@ -19,23 +22,79 @@ const OPTIONS: {
 	totalSegments: number;
 	activeSegments: number;
 }[] = [
-	{ id: 'gym', title: 'Gimnasio', description: 'Entrenamiento de fuerza y pesas', icon: 'dumbbell', totalSegments: 5, activeSegments: 5 },
-	{ id: 'running', title: 'Running', description: 'Carreras o trotes en ruta o cinta', icon: 'run', totalSegments: 5, activeSegments: 4 },
-	{ id: 'football', title: 'Fútbol', description: 'Partidos o entrenamientos semanales', icon: 'soccer', totalSegments: 5, activeSegments: 4 },
-	{ id: 'basket', title: 'Basquet', description: 'Juego recreativo o competitivo', icon: 'basketball', totalSegments: 5, activeSegments: 4 },
-	{ id: 'cycling', title: 'Ciclismo', description: 'Rutas al aire libre o bicicleta fija', icon: 'bike', totalSegments: 5, activeSegments: 5 },
-	{ id: 'swimming', title: 'Natación', description: 'Sesiones de nado por distancia o tiempo', icon: 'swim', totalSegments: 5, activeSegments: 5 },
-];
+		{ id: 'gym', title: 'Gimnasio', description: 'Entrenamiento de fuerza y pesas', icon: 'dumbbell', totalSegments: 5, activeSegments: 5 },
+		{ id: 'running', title: 'Running', description: 'Carreras o trotes en ruta o cinta', icon: 'run', totalSegments: 5, activeSegments: 4 },
+		{ id: 'football', title: 'Fútbol', description: 'Partidos o entrenamientos semanales', icon: 'soccer', totalSegments: 5, activeSegments: 4 },
+		{ id: 'basket', title: 'Basquet', description: 'Juego recreativo o competitivo', icon: 'basketball', totalSegments: 5, activeSegments: 4 },
+		{ id: 'cycling', title: 'Ciclismo', description: 'Rutas al aire libre o bicicleta fija', icon: 'bike', totalSegments: 5, activeSegments: 5 },
+		{ id: 'swimming', title: 'Natación', description: 'Sesiones de nado por distancia o tiempo', icon: 'swim', totalSegments: 5, activeSegments: 5 },
+	];
 
 export default function Form07Deporte() {
 	const router = useRouter();
 	const [selected, setSelected] = useState<SportLevel>('gym');
+	const [isSaving, setIsSaving] = useState(false);
+	const { data, updateData, resetData } = useOnboarding();
+
+	const deporteMap = {
+		gym: 'gimnasio',
+		running: 'running',
+		football: 'futbol',
+		basket: 'basquet',
+		cycling: 'ciclismo',
+		swimming: 'natacion',
+	} as const;
 
 	const selectedOption = useMemo(() => OPTIONS.find((o) => o.id === selected), [selected]);
 
-	const handleContinue = () => {
-		console.log('Deporte seleccionado:', selectedOption?.title ?? selected);
-		router.push('/onboarding/loading' as Href);
+	const handleContinue = async () => {
+		if (isSaving) return;
+		setIsSaving(true);
+
+		try {
+			// 1. Guardar el deporte en el contexto
+			const datosCompletos = {
+				...data,
+				deporte: deporteMap[selected],
+			};
+
+			// 2. Enviar TODOS los datos del onboarding a la API
+			await profileService.saveOnboardingProfile(datosCompletos);
+
+			// 3. Actualizar el usuario en AsyncStorage para que
+			//    formulario_completado = true en la próxima apertura
+			const session = await authStore.loadSession();
+			if (session) {
+				await authStore.saveSession({
+					access_token: session.access_token,
+					refresh_token: session.refresh_token,
+					expires_in: 900,
+					user: {
+						...session.user,
+						formulario_completado: true,
+					},
+				});
+			}
+
+			// 4. Limpiar el contexto del onboarding
+			resetData();
+
+			// 5. Navegar a la pantalla de carga/bienvenida
+			router.replace('/onboarding/loading');
+
+		} catch (error) {
+			const message = error instanceof Error
+				? error.message
+				: 'Error al guardar tu perfil. Intenta de nuevo.';
+
+			Alert.alert(
+				'Error al guardar',
+				message,
+				[{ text: 'Reintentar', onPress: () => setIsSaving(false) }],
+			);
+		} finally {
+			setIsSaving(false);
+		}
 	};
 
 	return (
@@ -113,8 +172,15 @@ export default function Form07Deporte() {
 							start={{ x: 0, y: 0 }}
 							end={{ x: 1, y: 0 }}
 							style={styles.continueGradient}>
-							<TouchableOpacity style={styles.continueButton} activeOpacity={0.9} onPress={handleContinue}>
-								<Text style={styles.continueText}>Finalizar</Text>
+							<TouchableOpacity
+								style={styles.continueButton}
+								activeOpacity={0.9}
+								onPress={handleContinue}
+								disabled={isSaving}>
+								{isSaving
+									? <ActivityIndicator color="#fdfcf9" />
+									: <Text style={styles.continueText}>Finalizar</Text>
+								}
 							</TouchableOpacity>
 						</LinearGradient>
 					</View>

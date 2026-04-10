@@ -7,6 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from './components/form-background-decor';
 
+import { useOnboarding } from '../../context/onboarding-context';
+
 const { width } = Dimensions.get('window');
 
 type ConditionLevel = 'diabetes' | 'hipertension' | 'hipotiroidismo' | 'resistencia' | 'ninguna';
@@ -19,56 +21,57 @@ const OPTIONS: {
 	totalSegments: number;
 	activeSegments: number;
 }[] = [
-	{
-		id: 'diabetes',
-		title: 'Diabetes',
-		description: 'Control de azucar y alimentacion estable',
-		icon: 'water-outline',
-		totalSegments: 4,
-		activeSegments: 4,
-	},
-	{
-		id: 'hipertension',
-		title: 'Hipertension arterial',
-		description: 'Monitoreo de sodio y presion arterial',
-		icon: 'stethoscope',
-		totalSegments: 4,
-		activeSegments: 4,
-	},
-	{
-		id: 'hipotiroidismo',
-		title: 'Hipotiroidismo',
-		description: 'Ajuste de energia y balance metabolico',
-		icon: 'brain',
-		totalSegments: 4,
-		activeSegments: 3,
-	},
-	{
-		id: 'resistencia',
-		title: 'Resistencia a la insulina',
-		description: 'Seleccion de carbohidratos de bajo impacto',
-		icon: 'molecule-co2',
-		totalSegments: 5,
-		activeSegments: 5,
-	},
-	{
-		id: 'ninguna',
-		title: 'Ninguna',
-		description: 'No tengo condiciones medicas actualmente',
-		icon: 'shield-check-outline',
-		totalSegments: 4,
-		activeSegments: 2,
-	},
-];
+		{
+			id: 'diabetes',
+			title: 'Diabetes',
+			description: 'Control de azucar y alimentacion estable',
+			icon: 'water-outline',
+			totalSegments: 4,
+			activeSegments: 4,
+		},
+		{
+			id: 'hipertension',
+			title: 'Hipertension arterial',
+			description: 'Monitoreo de sodio y presion arterial',
+			icon: 'stethoscope',
+			totalSegments: 4,
+			activeSegments: 4,
+		},
+		{
+			id: 'hipotiroidismo',
+			title: 'Hipotiroidismo',
+			description: 'Ajuste de energia y balance metabolico',
+			icon: 'brain',
+			totalSegments: 4,
+			activeSegments: 3,
+		},
+		{
+			id: 'resistencia',
+			title: 'Resistencia a la insulina',
+			description: 'Seleccion de carbohidratos de bajo impacto',
+			icon: 'molecule-co2',
+			totalSegments: 5,
+			activeSegments: 5,
+		},
+		{
+			id: 'ninguna',
+			title: 'Ninguna',
+			description: 'No tengo condiciones medicas actualmente',
+			icon: 'shield-check-outline',
+			totalSegments: 4,
+			activeSegments: 2,
+		},
+	];
 
 export default function Form02Condicio() {
 	const router = useRouter();
 	const [selected, setSelected] = useState<ConditionLevel>('ninguna');
+	const { updateData } = useOnboarding();
 
 	const selectedOption = useMemo(() => OPTIONS.find((o) => o.id === selected), [selected]);
 
 	const handleContinue = () => {
-		console.log('Condicion seleccionada:', selectedOption?.title ?? selected);
+		updateData({ condicion_medica: selected });
 		router.push('/formularios/form03' as Href);
 	};
 

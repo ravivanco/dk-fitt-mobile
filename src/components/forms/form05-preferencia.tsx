@@ -7,6 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from './components/form-background-decor';
 
+import { useOnboarding } from '../../context/onboarding-context';
+
 const { width } = Dimensions.get('window');
 
 type FoodOption = {
@@ -91,6 +93,7 @@ const GROUPS: FoodGroup[] = [
 export default function Form05Preferencia() {
 	const router = useRouter();
 	const [selected, setSelected] = useState<Set<string>>(new Set(['lacteos:leche']));
+	const { updateData } = useOnboarding();
 
 	const selectedCount = useMemo(() => selected.size, [selected]);
 
@@ -108,6 +111,8 @@ export default function Form05Preferencia() {
 	};
 
 	const handleContinue = () => {
+		// Convertir el Set a array para guardar en el contexto
+		updateData({ alimentos_preferidos: Array.from(selected) });
 		router.push('/formularios/form06' as Href);
 	};
 

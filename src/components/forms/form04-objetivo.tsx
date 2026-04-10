@@ -7,6 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from './components/form-background-decor';
 
+import { useOnboarding } from '../../context/onboarding-context';
+
 const { width } = Dimensions.get('window');
 
 type Objective = 'reducir' | 'ganar' | 'habitos';
@@ -19,40 +21,47 @@ const OPTIONS: {
 	totalSegments: number;
 	activeSegments: number;
 }[] = [
-	{
-		id: 'reducir',
-		title: 'Reducir peso',
-		description: 'Plan enfocado en deficit calorico controlado',
-		icon: 'scale-bathroom',
-		totalSegments: 4,
-		activeSegments: 3,
-	},
-	{
-		id: 'ganar',
-		title: 'Ganar musculo',
-		description: 'Mayor aporte proteico y calorias de calidad',
-		icon: 'arm-flex',
-		totalSegments: 5,
-		activeSegments: 5,
-	},
-	{
-		id: 'habitos',
-		title: 'Mejorar habitos',
-		description: 'Alimentacion balanceada y sostenible',
-		icon: 'star-four-points',
-		totalSegments: 4,
-		activeSegments: 4,
-	},
-];
+		{
+			id: 'reducir',
+			title: 'Reducir peso',
+			description: 'Plan enfocado en deficit calorico controlado',
+			icon: 'scale-bathroom',
+			totalSegments: 4,
+			activeSegments: 3,
+		},
+		{
+			id: 'ganar',
+			title: 'Ganar musculo',
+			description: 'Mayor aporte proteico y calorias de calidad',
+			icon: 'arm-flex',
+			totalSegments: 5,
+			activeSegments: 5,
+		},
+		{
+			id: 'habitos',
+			title: 'Mejorar habitos',
+			description: 'Alimentacion balanceada y sostenible',
+			icon: 'star-four-points',
+			totalSegments: 4,
+			activeSegments: 4,
+		},
+	];
 
 export default function Form04Objetivo() {
 	const router = useRouter();
 	const [selected, setSelected] = useState<Objective>('reducir');
+	const { updateData } = useOnboarding();
+
+	const objetivoMap = {
+		reducir: 'Reducir mi peso corporal',
+		ganar: 'Ganar masa muscular',
+		habitos: 'Mejorar mis hábitos alimenticios',
+	} as const;
 
 	const selectedOption = useMemo(() => OPTIONS.find((o) => o.id === selected), [selected]);
 
 	const handleContinue = () => {
-		console.log('Objetivo seleccionado:', selectedOption?.title ?? selected);
+		updateData({ objetivo: objetivoMap[selected] });
 		router.push('/formularios/form05' as Href);
 	};
 

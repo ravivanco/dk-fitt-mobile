@@ -3,27 +3,32 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, type Href } from 'expo-router';
 import React, { useState } from 'react';
 import {
-    Dimensions,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Dimensions,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from './components/form-background-decor';
+
+import { useOnboarding } from '../../context/onboarding-context';
 
 const { width } = Dimensions.get('window');
 
 export default function Form03Intolerancia() {
   const router = useRouter();
   const [notes, setNotes] = useState('');
+  const { updateData } = useOnboarding();
 
   const handleContinue = () => {
+    updateData({ alergias_intolerancias: notes });
     router.push('/formularios/form04' as Href);
   };
+
 
   return (
     <SafeAreaView style={styles.safeArea}>

@@ -7,6 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from './components/form-background-decor';
 
+import { useOnboarding } from '../../context/onboarding-context';
+
 const { width } = Dimensions.get('window');
 
 type ActivityLevel = 'sedentario' | 'bajo' | 'mediano' | 'alto';
@@ -19,48 +21,50 @@ const OPTIONS: {
 	totalSegments: number;
 	activeSegments: number;
 }[] = [
-	{
-		id: 'sedentario',
-		title: 'Sedentario',
-		description: 'Poca o ninguna actividad fisica.',
-		icon: 'sofa-outline',
-		totalSegments: 4,
-		activeSegments: 1,
-	},
-	{
-		id: 'bajo',
-		title: 'Bajo',
-		description: 'Caminar, tareas domesticas, subir escaleras.',
-		icon: 'walk',
-		totalSegments: 4,
-		activeSegments: 2,
-	},
-	{
-		id: 'mediano',
-		title: 'Mediano',
-		description: 'Deportes, gimnasio 1-2 veces por semana',
-		icon: 'run-fast',
-		totalSegments: 4,
-		activeSegments: 3,
-	},
-	{
-		id: 'alto',
-		title: 'Alto',
-		description: 'Entrenamiento intenso, gimnasio 5-6 veces por semana',
-		icon: 'weight-lifter',
-		totalSegments: 5,
-		activeSegments: 5,
-	},
-];
+		{
+			id: 'sedentario',
+			title: 'Sedentario',
+			description: 'Poca o ninguna actividad fisica.',
+			icon: 'sofa-outline',
+			totalSegments: 4,
+			activeSegments: 1,
+		},
+		{
+			id: 'bajo',
+			title: 'Bajo',
+			description: 'Caminar, tareas domesticas, subir escaleras.',
+			icon: 'walk',
+			totalSegments: 4,
+			activeSegments: 2,
+		},
+		{
+			id: 'mediano',
+			title: 'Mediano',
+			description: 'Deportes, gimnasio 1-2 veces por semana',
+			icon: 'run-fast',
+			totalSegments: 4,
+			activeSegments: 3,
+		},
+		{
+			id: 'alto',
+			title: 'Alto',
+			description: 'Entrenamiento intenso, gimnasio 5-6 veces por semana',
+			icon: 'weight-lifter',
+			totalSegments: 5,
+			activeSegments: 5,
+		},
+	];
 
 export default function Form01Actividad() {
 	const router = useRouter();
 	const [selected, setSelected] = useState<ActivityLevel>('mediano');
+	const { updateData } = useOnboarding();
 
 	const selectedOption = useMemo(() => OPTIONS.find((o) => o.id === selected), [selected]);
 
 	const handleContinue = () => {
-		console.log('Nivel seleccionado:', selectedOption?.title ?? selected);
+		// Guardar en el contexto global antes de navegar
+		updateData({ nivel_actividad_fisica: selected === 'mediano' ? 'medio' : selected });
 		router.push('/formularios/form02' as Href);
 	};
 

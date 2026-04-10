@@ -4,6 +4,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, type Href } from 'expo-router';
 import React, { useState } from 'react';
 import {
+  Alert,
+  ActivityIndicator,
     Pressable,
     StyleSheet,
     Text,
@@ -13,9 +15,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useAuth } from '@/hooks/use-auth';
+
 export default function LoginScreen() {
   // Router para navegar entre pantallas del flujo auth.
   const router = useRouter();
+  const { login, isLoading, error, clearError } = useAuth();
 
   // Estado local de los campos del formulario.
   const [email, setEmail] = useState('');
@@ -24,10 +29,26 @@ export default function LoginScreen() {
   // Controla si la contrasena se muestra u oculta.
   const [showPassword, setShowPassword] = useState(false);
 
-  // Navegacion temporal al home; aqui luego puedes validar credenciales reales.
-  const handleLogin = () => {
-    router.replace('/formularios/form01' as Href);
+  const handleLogin = async () => {
+    if (!email.trim()) {
+      Alert.alert('Campo requerido', 'Ingresa tu correo institucional');
+      return;
+    }
+
+    if (!password.trim()) {
+      Alert.alert('Campo requerido', 'Ingresa tu contrasena');
+      return;
+    }
+
+    await login({
+      correo_institucional: email.trim().toLowerCase(),
+      contrasena: password,
+    });
   };
+
+  if (error) {
+    Alert.alert('Error', error, [{ text: 'OK', onPress: clearError }]);
+  }
 
   return (
     <View style={styles.container}>
@@ -61,6 +82,7 @@ export default function LoginScreen() {
                 value={email}
                 onChangeText={setEmail}
                 style={styles.input}
+                editable={!isLoading}
               />
             </View>
 
@@ -73,8 +95,9 @@ export default function LoginScreen() {
                 value={password}
                 onChangeText={setPassword}
                 style={styles.input}
+                editable={!isLoading}
               />
-              <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)}>
+              <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)} disabled={isLoading}>
                 <MaterialCommunityIcons
                   name={showPassword ? 'eye-off-outline' : 'eye-outline'}
                   size={22}
@@ -88,16 +111,16 @@ export default function LoginScreen() {
             </Pressable>
 
             {/* Boton principal con degradado y sombra. */}
-            <Pressable style={styles.buttonShadow} onPress={handleLogin}>
+            <Pressable style={styles.buttonShadow} onPress={handleLogin} disabled={isLoading}>
               <LinearGradient colors={['#ecb607', '#f6c510', '#fbd232']} style={styles.button}>
-                <Text style={styles.buttonText}>Ingresar</Text>
+                {isLoading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>Ingresar</Text>}
               </LinearGradient>
             </Pressable>
 
             {/* Call to action secundario para registro. */}
             <View style={styles.registerWrap}>
               <Text style={styles.registerText}>No tienes una cuenta?</Text>
-              <Pressable onPress={() => router.push('/auth/register' as Href)}>
+              <Pressable onPress={() => router.push('/auth/register' as Href)} disabled={isLoading}>
                 <Text style={styles.registerLink}>Registrarte</Text>
               </Pressable>
             </View>
@@ -118,40 +141,43 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 14,
   },
   // Superficie principal del formulario.
   card: {
     backgroundColor: '#ffffff',
-    borderRadius: 28,
-    paddingHorizontal: 22,
-    paddingVertical: 28,
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    width: '100%',
+    maxWidth: 380,
+    alignSelf: 'center',
     shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 4,
   },
   logoWrap: {
     alignItems: 'center',
-    marginTop: 6,
-    marginBottom: 26,
+    marginTop: 2,
+    marginBottom: 18,
   },
   // Tamano visual del logo cargado desde assets.
   logoImage: {
     width: 300,
-    height: 250,
+    height: 220,
   },
   // Espaciado vertical entre elementos del formulario.
   fieldsWrap: {
-    gap: 14,
+    gap: 12,
   },
   // Estilo base compartido por los dos inputs.
   inputWrap: {
-    height: 56,
+    height: 50,
     borderWidth: 1.8,
     borderColor: '#7c7268',
-    borderRadius: 16,
+    borderRadius: 14,
     backgroundColor: '#ffffff',
     paddingHorizontal: 14,
     flexDirection: 'row',
@@ -161,13 +187,13 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     color: '#5f564d',
-    fontSize: 18,
+    fontSize: 15,
   },
   // Texto auxiliar de recuperacion de contrasena.
   forgotText: {
     color: '#8f877d',
     textAlign: 'right',
-    fontSize: 16,
+    fontSize: 15,
   },
   // Capa de sombra del boton para dar profundidad.
   buttonShadow: {
@@ -181,28 +207,28 @@ const styles = StyleSheet.create({
   // Boton con degradado principal.
   button: {
     borderRadius: 16,
-    height: 58,
+    height: 54,
     justifyContent: 'center',
     alignItems: 'center',
   },
   buttonText: {
     color: '#ffffff',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
   },
   // Bloque inferior de texto para registro.
   registerWrap: {
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: 2,
     gap: 2,
   },
   registerText: {
     color: '#8f877d',
-    fontSize: 16,
+    fontSize: 15,
   },
   registerLink: {
     color: '#5f564d',
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '700',
   },
   // Acentos geometricos del fondo.

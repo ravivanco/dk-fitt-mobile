@@ -7,13 +7,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from './components/form-background-decor';
 
+import { useOnboarding } from '../../context/onboarding-context';
+
 const { width } = Dimensions.get('window');
 
 export default function Form06Evitar() {
 	const router = useRouter();
 	const [notes, setNotes] = useState('');
+	const { updateData } = useOnboarding();
 
 	const handleContinue = () => {
+		updateData({ alimentos_restringidos: notes });
 		router.push('/formularios/form07' as Href);
 	};
 
