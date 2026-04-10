@@ -17,7 +17,7 @@ export default function Form06Evitar() {
 	const { updateData } = useOnboarding();
 
 	const handleContinue = () => {
-		updateData({ alimentos_restringidos: notes });
+		updateData({ restricciones_alimenticias: notes });
 		router.push('/formularios/form07' as Href);
 	};
 

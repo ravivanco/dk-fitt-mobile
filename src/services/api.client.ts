@@ -33,6 +33,19 @@ export const apiClient: AxiosInstance = axios.create({
  */
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    if (__DEV__) {
+      const url = config.url ?? '';
+      if (url.includes('/patient-profile') || url.includes('/foods')) {
+        console.log('[api][request]', {
+          method: config.method,
+          url,
+          hasAuth: Boolean(config.headers?.Authorization),
+          data: config.data,
+          params: config.params,
+        });
+      }
+    }
+
     // El token se inyecta desde authStore cuando se necesita.
     // Ver: src/store/auth.store.ts → setAuthHeader()
     return config;
@@ -47,17 +60,59 @@ apiClient.interceptors.request.use(
  */
 apiClient.interceptors.response.use(
   // Respuesta exitosa — la deja pasar tal cual
-  (response) => response,
+  (response) => {
+    if (__DEV__) {
+      const url = response.config?.url ?? '';
+      if (url.includes('/patient-profile') || url.includes('/foods')) {
+        console.log('[api][response]', {
+          status: response.status,
+          url,
+          data: response.data,
+        });
+      }
+    }
+
+    return response;
+  },
 
   // Error — lo convierte en un mensaje claro
   (error: AxiosError<ApiErrorResponse>) => {
     if (error.response) {
       // La API respondió con un error (4xx, 5xx)
-      const apiError = error.response.data;
+      const apiError = error.response.data as
+        | ApiErrorResponse
+        | { message?: string; error?: string | { message?: string; details?: Array<{ field: string; message: string }> } }
+        | undefined;
+      const apiErrorRecord = apiError as {
+        message?: string;
+        error?: string | { message?: string; details?: Array<{ field: string; message: string }> };
+      } | undefined;
 
       // Si la API retornó un error estructurado, lo lanzamos tal cual
-      if (apiError?.error?.message) {
-        return Promise.reject(new Error(apiError.error.message));
+      const structuredMessage =
+        typeof apiErrorRecord?.error === 'object' ? apiErrorRecord.error?.message : undefined;
+      const plainMessage =
+        typeof apiErrorRecord?.message === 'string'
+          ? apiErrorRecord.message
+          : typeof apiErrorRecord?.error === 'string'
+            ? apiErrorRecord.error
+            : undefined;
+
+      const detailMessage =
+        typeof apiErrorRecord?.error === 'object' && Array.isArray(apiErrorRecord.error?.details)
+          ? apiErrorRecord.error.details
+              .map((d) => `${d.field}: ${d.message}`)
+              .join(' | ')
+          : '';
+
+      const backendMessage = structuredMessage ?? plainMessage;
+      if (backendMessage) {
+        const combined = detailMessage ? `${backendMessage} (${detailMessage})` : backendMessage;
+        const normalizedError = Object.assign(new Error(combined), {
+          backendData: apiErrorRecord,
+          status: error.response.status,
+        });
+        return Promise.reject(normalizedError);
       }
 
       // Errores HTTP genéricos
@@ -73,8 +128,12 @@ apiClient.interceptors.response.use(
         503: 'Servicio no disponible temporalmente.',
       };
 
-      const message = statusMessages[error.response.status] ?? 'Error desconocido';
-      return Promise.reject(new Error(message));
+      const message = statusMessages[error.response.status] ?? `Error HTTP ${error.response.status}`;
+      const normalizedError = Object.assign(new Error(message), {
+        backendData: apiErrorRecord,
+        status: error.response.status,
+      });
+      return Promise.reject(normalizedError);
     }
 
     if (error.request) {

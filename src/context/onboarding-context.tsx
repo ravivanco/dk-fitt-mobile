@@ -25,11 +25,14 @@ export interface OnboardingData {
   // Form04 — Objetivo principal
   objetivo: 'Reducir mi peso corporal' | 'Ganar masa muscular' | 'Mejorar mis hábitos alimenticios' | '';
 
-  // Form05 — Alimentos preferidos (array de IDs como strings)
+  // Form05 — Alimentos preferidos (tokens UI o IDs serializados)
   alimentos_preferidos: string[];
 
-  // Form06 — Alimentos a evitar (texto libre)
-  alimentos_restringidos: string;
+  // Alimentos restringidos por selección (tokens UI o IDs serializados)
+  alimentos_restringidos: string[];
+
+  // Form06 — Restricciones alimenticias en texto libre
+  restricciones_alimenticias: string;
 
   // Form07 — Deporte (valor exacto que acepta la API)
   deporte: 'gimnasio' | 'running' | 'caminata' | 'ciclismo' | 'futbol' | 'basquet' | 'natacion' | 'entrenamiento_casa' | 'otro' | 'ninguno' | '';
@@ -44,7 +47,8 @@ const INITIAL_DATA: OnboardingData = {
   alergias_intolerancias: '',
   objetivo:               '',
   alimentos_preferidos:   [],
-  alimentos_restringidos: '',
+  alimentos_restringidos: [],
+  restricciones_alimenticias: '',
   deporte:                '',
 };
 

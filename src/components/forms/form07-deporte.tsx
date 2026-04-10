@@ -83,9 +83,21 @@ export default function Form07Deporte() {
 			router.replace('/onboarding/loading');
 
 		} catch (error) {
-			const message = error instanceof Error
-				? error.message
-				: 'Error al guardar tu perfil. Intenta de nuevo.';
+			const backendData = (error as { backendData?: unknown; response?: { data?: unknown } })?.backendData
+				?? (error as { response?: { data?: unknown } })?.response?.data;
+
+			if (__DEV__) {
+				console.error('Error guardando onboarding:', error);
+				if (backendData) {
+					console.error('error.response.data:', backendData);
+				}
+			}
+
+			const message = backendData
+				? JSON.stringify(backendData)
+				: error instanceof Error
+					? error.message
+					: 'Error al guardar tu perfil. Intenta de nuevo.';
 
 			Alert.alert(
 				'Error al guardar',

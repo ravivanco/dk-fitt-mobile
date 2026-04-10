@@ -1,5 +1,5 @@
 import { OnboardingProvider } from '../context/onboarding-context';
-import { Stack, router } from 'expo-router';
+import { Href, Stack, router } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 
@@ -9,30 +9,24 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
 	const [isReady, setIsReady] = useState(false);
+	const [pendingRoute, setPendingRoute] = useState<Href | null>(null);
 
 	useEffect(() => {
 		void checkSession();
 	}, []);
 
+	useEffect(() => {
+		if (!isReady || !pendingRoute) return;
+		router.replace(pendingRoute);
+	}, [isReady, pendingRoute]);
+
 	const checkSession = async () => {
 		try {
-			const session = await authStore.loadSession();
-
-			if (session) {
-				const { user } = session;
-
-				if (!user.formulario_completado) {
-					router.replace('/formularios/form01');
-				} else if (user.modulo_habilitado) {
-					router.replace('/mi-plan');
-				} else {
-					router.replace('/home');
-				}
-			} else {
-				router.replace('/auth/login');
-			}
+			// Politica de seguridad solicitada: siempre pedir login al abrir la app.
+			await authStore.clearSession();
+			setPendingRoute('/auth/login');
 		} catch {
-			router.replace('/auth/login');
+			setPendingRoute('/auth/login');
 		} finally {
 			setIsReady(true);
 			await SplashScreen.hideAsync();
