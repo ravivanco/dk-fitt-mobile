@@ -78,6 +78,8 @@ export const authService = {
       role:      string;
       id_perfil: number | null;
       estado:    string;
+      edad?:     number;
+      fecha_nacimiento?: string;
     }>>('/auth/me');
 
     const apiData = response.data.data;
@@ -91,6 +93,8 @@ export const authService = {
       id_usuario: apiData.id,
       correo_institucional: apiData.email,
       rol: apiData.role as AuthUser['rol'],
+      edad: apiData.edad,
+      fecha_nacimiento: apiData.fecha_nacimiento,
     };
   },
 

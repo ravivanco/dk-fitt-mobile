@@ -1,13 +1,12 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
 
-export default function MiPlanScreen() {
+export default function EjerciciosScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.wrapper}>
@@ -18,7 +17,7 @@ export default function MiPlanScreen() {
             <TouchableOpacity onPress={() => router.back()}>
               <MaterialCommunityIcons name="arrow-left" size={24} color="#0f1115" />
             </TouchableOpacity>
-            <Text style={styles.title}>Mi Plan</Text>
+            <Text style={styles.title}>Ejercicios</Text>
             <View style={{ width: 24 }} />
           </View>
 
@@ -26,17 +25,17 @@ export default function MiPlanScreen() {
             <View style={styles.mainCard}>
               <View style={styles.imageContainer}>
                 <View style={styles.iconLarge}>
-                  <MaterialCommunityIcons name="clipboard-list" size={60} color="#22a656" />
+                  <MaterialCommunityIcons name="dumbbell" size={60} color="#1a6bd8" />
                 </View>
               </View>
 
-              <Text style={styles.cardTitle}>Mi Plan</Text>
+              <Text style={styles.cardTitle}>Ejercicios</Text>
               <Text style={styles.cardDescription}>
-                Tu ruta personalizada para cumplir tus objetivos paso a paso.
+                Rutinas guiadas para entrenar mejor y mantener constancia.
               </Text>
 
               <TouchableOpacity style={styles.button} activeOpacity={0.7}>
-                <Text style={styles.buttonText}>Continuar</Text>
+                <Text style={styles.buttonText}>Empezar</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -97,12 +96,12 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: 20,
-    backgroundColor: '#f0f8f3',
+    backgroundColor: '#f0f6fb',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 20,
     borderWidth: 1.5,
-    borderColor: '#c3e8ca',
+    borderColor: '#b3d9f2',
   },
   iconLarge: {
     width: 120,
@@ -112,7 +111,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#c3e8ca',
+    borderColor: '#b3d9f2',
   },
   cardTitle: {
     fontSize: 24,
@@ -132,9 +131,9 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingVertical: 14,
     borderRadius: 24,
-    backgroundColor: '#f0f8f3',
+    backgroundColor: '#f0f6fb',
     borderWidth: 1.5,
-    borderColor: '#c3e8ca',
+    borderColor: '#b3d9f2',
     alignItems: 'center',
     justifyContent: 'center',
   },

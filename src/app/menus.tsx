@@ -1,13 +1,12 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
 
-export default function MiPlanScreen() {
+export default function MenusScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.wrapper}>
@@ -18,7 +17,7 @@ export default function MiPlanScreen() {
             <TouchableOpacity onPress={() => router.back()}>
               <MaterialCommunityIcons name="arrow-left" size={24} color="#0f1115" />
             </TouchableOpacity>
-            <Text style={styles.title}>Mi Plan</Text>
+            <Text style={styles.title}>Menus</Text>
             <View style={{ width: 24 }} />
           </View>
 
@@ -26,17 +25,17 @@ export default function MiPlanScreen() {
             <View style={styles.mainCard}>
               <View style={styles.imageContainer}>
                 <View style={styles.iconLarge}>
-                  <MaterialCommunityIcons name="clipboard-list" size={60} color="#22a656" />
+                  <MaterialCommunityIcons name="salad" size={60} color="#22a656" />
                 </View>
               </View>
 
-              <Text style={styles.cardTitle}>Mi Plan</Text>
+              <Text style={styles.cardTitle}>Menus</Text>
               <Text style={styles.cardDescription}>
-                Tu ruta personalizada para cumplir tus objetivos paso a paso.
+                Opciones de comidas saludables adaptadas a tu plan diario.
               </Text>
 
               <TouchableOpacity style={styles.button} activeOpacity={0.7}>
-                <Text style={styles.buttonText}>Continuar</Text>
+                <Text style={styles.buttonText}>Explorar</Text>
               </TouchableOpacity>
             </View>
           </View>

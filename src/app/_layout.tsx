@@ -42,7 +42,13 @@ export default function RootLayout() {
 				<Stack.Screen name="auth/register" />
 				<Stack.Screen name="home" />
 				<Stack.Screen name="mi-plan" />
+				<Stack.Screen name="control-calorico" />
+				<Stack.Screen name="menus" />
+				<Stack.Screen name="ejercicios" />
+				<Stack.Screen name="progreso" />
 				<Stack.Screen name="perfil" />
+				<Stack.Screen name="perfil-editar" />
+				<Stack.Screen name="biom-editar" />
 				<Stack.Screen name="calendario" />
 				<Stack.Screen name="formularios/form01" />
 				<Stack.Screen name="formularios/form02" />

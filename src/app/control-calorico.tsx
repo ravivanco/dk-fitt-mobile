@@ -1,13 +1,12 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
 
-export default function MiPlanScreen() {
+export default function ControlCaloricoScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.wrapper}>
@@ -18,7 +17,7 @@ export default function MiPlanScreen() {
             <TouchableOpacity onPress={() => router.back()}>
               <MaterialCommunityIcons name="arrow-left" size={24} color="#0f1115" />
             </TouchableOpacity>
-            <Text style={styles.title}>Mi Plan</Text>
+            <Text style={styles.title}>Control Calorico</Text>
             <View style={{ width: 24 }} />
           </View>
 
@@ -26,13 +25,13 @@ export default function MiPlanScreen() {
             <View style={styles.mainCard}>
               <View style={styles.imageContainer}>
                 <View style={styles.iconLarge}>
-                  <MaterialCommunityIcons name="clipboard-list" size={60} color="#22a656" />
+                  <MaterialCommunityIcons name="fire" size={60} color="#ff8a3d" />
                 </View>
               </View>
 
-              <Text style={styles.cardTitle}>Mi Plan</Text>
+              <Text style={styles.cardTitle}>Control Calorico</Text>
               <Text style={styles.cardDescription}>
-                Tu ruta personalizada para cumplir tus objetivos paso a paso.
+                Monitorea tu ingesta calórica diaria y mantén el equilibrio perfecto para alcanzar tus objetivos.
               </Text>
 
               <TouchableOpacity style={styles.button} activeOpacity={0.7}>
@@ -97,12 +96,12 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: 20,
-    backgroundColor: '#f0f8f3',
+    backgroundColor: '#fff8f2',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 20,
     borderWidth: 1.5,
-    borderColor: '#c3e8ca',
+    borderColor: '#ffd8be',
   },
   iconLarge: {
     width: 120,
@@ -112,7 +111,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#c3e8ca',
+    borderColor: '#ffd8be',
   },
   cardTitle: {
     fontSize: 24,
@@ -132,9 +131,9 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingVertical: 14,
     borderRadius: 24,
-    backgroundColor: '#f0f8f3',
+    backgroundColor: '#fff8f2',
     borderWidth: 1.5,
-    borderColor: '#c3e8ca',
+    borderColor: '#ffd8be',
     alignItems: 'center',
     justifyContent: 'center',
   },

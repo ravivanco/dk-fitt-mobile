@@ -20,16 +20,43 @@ export interface RegisterRequest {
   fecha_nacimiento:     string; // formato YYYY-MM-DD
 }
 
+// ── Tipos para Onboarding ──────────────────────────────────────
+
+export interface Condicion {
+  id_condicion: number;
+  nombre: string;
+}
+
+export interface AlimentoItem {
+  id_alimento: number;
+  nombre_alimento: string;
+}
+
+export interface OnboardingData {
+  nivel_actividad_fisica: string;
+  objetivo: string;
+  alergias_intolerancias: string;
+  restricciones_alimenticias: string;
+  condiciones: Condicion[];
+  alimentos_preferidos: AlimentoItem[];
+  alimentos_restringidos: AlimentoItem[];
+  deportes: string[];
+}
+
 // ── Response types (lo que retorna la API) ────────────────────
 
 export interface AuthUser {
-  id_usuario:           number;
-  nombres:              string;
-  apellidos:            string;
-  correo_institucional: string;
-  rol:                  'paciente' | 'nutricionista' | 'administrador';
+  id_usuario:            number;
+  nombres:               string;
+  apellidos:             string;
+  correo_institucional:  string;
+  rol:                   'paciente' | 'nutricionista' | 'administrador';
+  fecha_nacimiento?:     string; // opcional
+  edad?:                 number; // opcional, viene del API
+  sexo?:                 'M' | 'F' | 'O';
   formulario_completado: boolean;
-  modulo_habilitado:    boolean;
+  modulo_habilitado:     boolean;
+  onboarding?:           OnboardingData;
 }
 
 export interface LoginResponse {

@@ -1,12 +1,14 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
+import { authStore } from '@/store/auth.store';
 
 type MacroRingProps = {
   value: number;
@@ -95,19 +97,20 @@ export default function HomeScreen() {
 
     const loadUserData = async () => {
       try {
-        const [storedName, storedPlan] = await Promise.all([
-          AsyncStorage.getItem('dkfit.userName'),
-          AsyncStorage.getItem('dkfit.planActive'),
-        ]);
-
+        // Obtener datos del usuario autenticado
+        const user = await authStore.getUser();
+        
         if (!mounted) {
           return;
         }
 
-        if (storedName && storedName.trim().length > 0) {
-          setUserName(storedName.trim());
+        // Usar el nombre del usuario autenticado
+        if (user?.nombres) {
+          setUserName(user.nombres);
         }
 
+        // Obtener estado del plan
+        const storedPlan = await AsyncStorage.getItem('dkfit.planActive');
         if (storedPlan === 'false') {
           setPlanActive(false);
         } else if (storedPlan === 'true') {
@@ -155,7 +158,13 @@ export default function HomeScreen() {
         <FormBackgroundDecor />
 
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <Text style={styles.greeting}>Hola, {userName}</Text>
+          <View style={styles.headerContainer}>
+            <Text style={styles.greeting}>Hola, {userName}</Text>
+            <View style={styles.notificationButton}>
+              <MaterialCommunityIcons name="bell-outline" size={20} color="#666" />
+              <View style={styles.notificationBadge} />
+            </View>
+          </View>
 
           <View style={styles.calendarWrap}> 
             <ScrollView
@@ -173,7 +182,8 @@ export default function HomeScreen() {
             </ScrollView>
           </View>
 
-          <View style={styles.card}>
+          <TouchableOpacity onPress={() => router.push('/control-calorico')} activeOpacity={0.7}>
+            <View style={styles.card}>
             <View style={styles.cardHeader}>
               <View style={styles.titleRow}>
                 <View style={styles.flameCircle}>
@@ -211,6 +221,109 @@ export default function HomeScreen() {
               <MacroRing value={52} color="#ff2020" icon="🍞" label="Carbohidratos" status="Medio" />
               <MacroRing value={34} color="#e7b300" icon="🥑" label="Grasas" status="Bajo" />
             </View>
+            </View>
+          </TouchableOpacity>
+
+          {/* Grid de Tarjetas - Mi Plan y Progreso */}
+          <View style={styles.cardsGrid}>
+            {/* Mi Plan Card */}
+            <TouchableOpacity 
+              style={styles.gridCard}
+              onPress={() => router.push('/mi-plan')} 
+              activeOpacity={0.7}
+            >
+              <View style={styles.cardSmall}>
+                <View style={styles.iconContainerSmall}>
+                  <Image 
+                    source={require('@/assets/images/MiPlan.png')} 
+                    style={styles.cardImage}
+                    resizeMode="contain"
+                  />
+                </View>
+                <View style={styles.cardContentWrapper}>
+                  <Text style={styles.cardTitleSmall}>Mi plan</Text>
+                  <Text style={styles.cardDescSmall}>Tu ruta personalizada para cumplir tus objetivos paso a paso.</Text>
+                </View>
+                <TouchableOpacity style={styles.buttonSmall} activeOpacity={0.7}>
+                  <Text style={styles.buttonTextSmall}>Continuar</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+
+            {/* Progreso Card */}
+            <TouchableOpacity 
+              style={styles.gridCard}
+              onPress={() => router.push('/progreso')} 
+              activeOpacity={0.7}
+            >
+              <View style={styles.cardSmall}>
+                <View style={styles.iconContainerSmall}>
+                  <Image 
+                    source={require('@/assets/images/IMC.png')} 
+                    style={styles.cardImage}
+                    resizeMode="contain"
+                  />
+                </View>
+                <View style={styles.cardContentWrapper}>
+                  <Text style={styles.cardTitleSmall}>Progreso</Text>
+                  <Text style={styles.cardDescSmall}>Revisa tu avance y compara tus resultados en el tiempo.</Text>
+                </View>
+                <TouchableOpacity style={styles.buttonSmall} activeOpacity={0.7}>
+                  <Text style={styles.buttonTextSmall}>Ver Logros</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          {/* Grid de Tarjetas - Menus y Ejercicios */}
+          <View style={styles.cardsGrid}>
+            {/* Menus Card */}
+            <TouchableOpacity 
+              style={styles.gridCard}
+              onPress={() => router.push('/menus')} 
+              activeOpacity={0.7}
+            >
+              <View style={styles.cardSmall}>
+                <View style={styles.iconContainerSmall}>
+                  <Image 
+                    source={require('@/assets/images/Menu.png')} 
+                    style={styles.cardImage}
+                    resizeMode="contain"
+                  />
+                </View>
+                <View style={styles.cardContentWrapper}>
+                  <Text style={styles.cardTitleSmall}>Menus</Text>
+                  <Text style={styles.cardDescSmall}>Opciones de comidas saludables adaptadas a tu plan diario.</Text>
+                </View>
+                <TouchableOpacity style={styles.buttonSmall} activeOpacity={0.7}>
+                  <Text style={styles.buttonTextSmall}>Explorar</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+
+            {/* Ejercicios Card */}
+            <TouchableOpacity 
+              style={styles.gridCard}
+              onPress={() => router.push('/ejercicios')} 
+              activeOpacity={0.7}
+            >
+              <View style={styles.cardSmall}>
+                <View style={styles.iconContainerSmall}>
+                  <Image 
+                    source={require('@/assets/images/Ejercicios.png')} 
+                    style={styles.cardImage}
+                    resizeMode="contain"
+                  />
+                </View>
+                <View style={styles.cardContentWrapper}>
+                  <Text style={styles.cardTitleSmall}>Ejercicios</Text>
+                  <Text style={styles.cardDescSmall}>Rutinas guiadas para entrenar mejor y mantener constancia.</Text>
+                </View>
+                <TouchableOpacity style={styles.buttonSmall} activeOpacity={0.7}>
+                  <Text style={styles.buttonTextSmall}>Empezar</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.bottomSpacer} />
@@ -234,7 +347,7 @@ const styles = StyleSheet.create({
   },
   content: {
     flexGrow: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingTop: 6,
     paddingBottom: 112,
   },
@@ -245,6 +358,30 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 10,
     marginBottom: 14,
+  },
+  headerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  notificationButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef5444',
   },
   calendarRow: {
     marginTop: 0,
@@ -262,51 +399,54 @@ const styles = StyleSheet.create({
   },
   dayCard: {
     width: 62,
-    paddingVertical: 6,
-    borderRadius: 18,
+    height: 80,
+    paddingVertical: 8,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'transparent',
+    backgroundColor: '#f5f3f0',
+    borderWidth: 1,
+    borderColor: '#e8e4dd',
   },
   dayCardActive: {
     backgroundColor: '#ffffff',
-    borderWidth: 1.6,
-    borderColor: '#e5ddd1',
-    shadowColor: '#b8ab97',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 5,
+    borderWidth: 1.2,
+    borderColor: '#e8e4dd',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
     elevation: 2,
   },
   monthText: {
-    color: '#d3cdc2',
-    fontSize: 11,
-    lineHeight: 13,
-    fontWeight: '700',
-    letterSpacing: 0.4,
+    color: '#e0dbd3',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '600',
+    letterSpacing: 0.3,
   },
   monthTextActive: {
-    color: '#7e7568',
+    color: '#9a9184',
   },
   dayNumber: {
-    color: '#c7c0b7',
-    fontSize: 30,
-    lineHeight: 33,
+    color: '#ddd8d0',
+    fontSize: 28,
+    lineHeight: 32,
     fontWeight: '800',
-    marginTop: 0,
+    marginTop: 2,
   },
   dayNumberActive: {
-    color: '#11141b',
+    color: '#1a1a1a',
   },
   weekdayText: {
-    color: '#cbc2b7',
-    fontSize: 11,
-    lineHeight: 13,
-    fontWeight: '700',
-    marginTop: 1,
+    color: '#ddd8d0',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '600',
+    marginTop: 2,
   },
   weekdayTextActive: {
-    color: '#ef5444',
+    color: '#f5a623',
   },
   card: {
     borderRadius: 26,
@@ -321,6 +461,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 3,
+    marginBottom: 20,
   },
   cardHeader: {
     width: '100%',
@@ -348,12 +489,60 @@ const styles = StyleSheet.create({
     borderColor: '#ffd8be',
     backgroundColor: '#fff8f2',
   },
+  planCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#c3e8ca',
+    backgroundColor: '#f0f8f3',
+  },
+  menusCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#ffd8be',
+    backgroundColor: '#fff8f2',
+  },
+  ejerciciosCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#b3d9f2',
+    backgroundColor: '#f0f6fb',
+  },
+  progresoCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#f5e3a0',
+    backgroundColor: '#fffbf0',
+  },
   cardTitle: {
     color: '#101318',
     fontSize: 18,
     lineHeight: 22,
     fontWeight: '800',
     flexShrink: 1,
+  },
+  cardDescription: {
+    color: '#8e8579',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '500',
+    marginTop: 8,
+    paddingLeft: 38,
   },
   planBadge: {
     flexDirection: 'row',
@@ -467,6 +656,91 @@ const styles = StyleSheet.create({
     lineHeight: 11,
     fontWeight: '700',
     marginTop: 1,
+  },
+  cardsGrid: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 20,
+    marginTop: 8,
+  },
+  gridCard: {
+    flex: 1,
+  },
+  cardSmall: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#efebe4',
+    padding: 16,
+    alignItems: 'center',
+    shadowColor: '#120f08',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+    height: 320,
+    justifyContent: 'space-between',
+  },
+  iconContainerSmall: {
+    width: 140,
+    height: 140,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 0,
+    borderColor: 'transparent',
+    marginBottom: 8,
+  },
+  cardImage: {
+    width: 130,
+    height: 130,
+  },
+  cardTitleSmall: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f1115',
+    marginTop: 10,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  cardContentWrapper: {
+    flex: 1,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardDescSmall: {
+    fontSize: 11,
+    color: '#8e8579',
+    textAlign: 'center',
+    lineHeight: 15,
+    marginBottom: 0,
+    flex: 1,
+  },
+  buttonSmall: {
+    width: '100%',
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: '#f5a623',
+    borderWidth: 0,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    marginTop: 0,
+  },
+  buttonTextSmall: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  progressBar: {
+    display: 'none',
+  },
+  progressFill: {
+    display: 'none',
+  },
+  progressText: {
+    display: 'none',
   },
   bottomSpacer: {
     height: 6,
