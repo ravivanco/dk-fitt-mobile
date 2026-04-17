@@ -1,26 +1,54 @@
 import React, { useState, useEffect } from 'react';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { StyleSheet, Text, TouchableOpacity, View, ScrollView, TextInput, Alert } from 'react-native';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { StyleSheet, Text, TouchableOpacity, View, ScrollView, TextInput, Alert, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { useAuth } from '@/hooks/use-auth';
+import { authStore } from '@/store/auth.store';
 
 export default function PerfilEditarScreen() {
-  const { user } = useAuth();
+  const [user, setUser] = useState<any>(null);
   const [nombres, setNombres] = useState('');
   const [apellidos, setApellidos] = useState('');
   const [edad, setEdad] = useState('');
   const [loading, setLoading] = useState(false);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
 
   useEffect(() => {
-    if (user) {
-      setNombres(user.nombres);
-      setApellidos(user.apellidos);
+    const loadUser = async () => {
+      try {
+        const userData = await authStore.getUser();
+        setUser(userData);
+        setNombres(userData?.nombres || '');
+        setApellidos(userData?.apellidos || '');
+      } catch (error) {
+        console.error('Error loading user:', error);
+      }
+    };
+    loadUser();
+  }, []);
+
+  const pickImage = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled) {
+        setPhotoUri(result.assets[0].uri);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo cargar la imagen');
+      console.error(error);
     }
-  }, [user]);
+  };
 
   const handleSave = async () => {
     if (!nombres.trim() || !apellidos.trim()) {
@@ -61,9 +89,35 @@ export default function PerfilEditarScreen() {
           <View style={styles.content}>
             <Text style={styles.subtitle}>Actualiza tu información personal.</Text>
 
+            {/* Sección de Foto */}
+            <View style={styles.photoSection}>
+              <TouchableOpacity 
+                style={styles.photoContainer}
+                onPress={pickImage}
+              >
+                {photoUri ? (
+                  <Image 
+                    source={{ uri: photoUri }} 
+                    style={styles.photoImage}
+                  />
+                ) : (
+                  <View style={styles.photoPlaceholder}>
+                    <MaterialIcons name="add-a-photo" size={48} color="#f5a623" />
+                  </View>
+                )}
+                <View style={styles.editPhotoIcon}>
+                  <MaterialIcons name="edit" size={16} color="white" />
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.photoHint}>Toca para cambiar foto</Text>
+            </View>
+
             {/* Campo: Nombres */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Nombres</Text>
+              <View style={styles.labelWithIcon}>
+                <MaterialIcons name="person" size={18} color="#f5a623" />
+                <Text style={styles.label}>Nombres</Text>
+              </View>
               <TextInput
                 style={styles.input}
                 placeholder="Ingresa tu nombre"
@@ -76,7 +130,10 @@ export default function PerfilEditarScreen() {
 
             {/* Campo: Apellidos */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Apellidos</Text>
+              <View style={styles.labelWithIcon}>
+                <MaterialIcons name="badge" size={18} color="#f5a623" />
+                <Text style={styles.label}>Apellidos</Text>
+              </View>
               <TextInput
                 style={styles.input}
                 placeholder="Ingresa tu apellido"
@@ -89,7 +146,10 @@ export default function PerfilEditarScreen() {
 
             {/* Campo: Edad */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Edad (opcional)</Text>
+              <View style={styles.labelWithIcon}>
+                <MaterialIcons name="cake" size={18} color="#f5a623" />
+                <Text style={styles.label}>Edad (opcional)</Text>
+              </View>
               <TextInput
                 style={styles.input}
                 placeholder="Ingresa tu edad"
@@ -108,6 +168,7 @@ export default function PerfilEditarScreen() {
                 onPress={() => router.back()}
                 disabled={loading}
               >
+                <MaterialIcons name="close" size={20} color="#0f1115" />
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
               </TouchableOpacity>
 
@@ -116,7 +177,7 @@ export default function PerfilEditarScreen() {
                 onPress={handleSave}
                 disabled={loading}
               >
-                <MaterialCommunityIcons name="check" size={18} color="#ffffff" />
+                <MaterialIcons name="check-circle" size={20} color="#ffffff" />
                 <Text style={styles.saveButtonText}>
                   {loading ? 'Guardando...' : 'Guardar Cambios'}
                 </Text>
@@ -172,14 +233,63 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginBottom: 24,
   },
+  photoSection: {
+    alignItems: 'center',
+    marginBottom: 30,
+  },
+  photoContainer: {
+    position: 'relative',
+    marginBottom: 12,
+  },
+  photoImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 4,
+    borderColor: '#f5a623',
+  },
+  photoPlaceholder: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#f8f6f1',
+    borderWidth: 2,
+    borderColor: '#f5a623',
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editPhotoIcon: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f5a623',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#ffffff',
+  },
+  photoHint: {
+    fontSize: 12,
+    color: '#7c7268',
+    fontWeight: '600',
+  },
   inputGroup: {
     marginBottom: 20,
+  },
+  labelWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
   },
   label: {
     fontSize: 14,
     fontWeight: '600',
     color: '#0f1115',
-    marginBottom: 8,
   },
   input: {
     backgroundColor: '#ffffff',

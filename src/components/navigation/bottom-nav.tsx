@@ -13,7 +13,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Home', route: '/home', icon: 'home-variant-outline' },
   { label: 'Mi plan', route: '/mi-plan', icon: 'clipboard-text-outline' },
-  { label: 'Calendario', route: '/calendario', icon: 'calendar-month-outline' },
+  { label: 'Datos Med.', route: '/datos-medicos', icon: 'heart-pulse' },
   { label: 'Perfil', route: '/perfil', icon: 'account-circle-outline' },
 ];
 

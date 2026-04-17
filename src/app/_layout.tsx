@@ -49,7 +49,7 @@ export default function RootLayout() {
 				<Stack.Screen name="perfil" />
 				<Stack.Screen name="perfil-editar" />
 				<Stack.Screen name="biom-editar" />
-				<Stack.Screen name="calendario" />
+			<Stack.Screen name="datos-medicos" />
 				<Stack.Screen name="formularios/form01" />
 				<Stack.Screen name="formularios/form02" />
 				<Stack.Screen name="formularios/form03" />
