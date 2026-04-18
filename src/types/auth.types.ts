@@ -57,6 +57,27 @@ export interface AuthUser {
   formulario_completado: boolean;
   modulo_habilitado:     boolean;
   onboarding?:           OnboardingData;
+  evaluacion_clinica?:   {
+    id_evaluacion: number;
+    id_perfil: number;
+    id_nutricionista: number;
+    fecha_evaluacion: string;
+    peso_kg: string;
+    altura_cm: string;
+    porcentaje_grasa: string;
+    masa_muscular_kg: string;
+    otros_indicadores: any;
+    calorias_diarias_calculadas: number;
+    distribucion_carbohidratos_pct: number;
+    distribucion_proteinas_pct: number;
+    distribucion_grasas_pct: number;
+    imc: string;
+    agua_corporal_pct?: string;
+    masa_osea_kg?: string;
+    grasa_visceral?: string;
+    tmb_kcal?: string;
+    created_at: string;
+  };
 }
 
 export interface LoginResponse {

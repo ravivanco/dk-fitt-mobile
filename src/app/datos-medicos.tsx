@@ -10,6 +10,7 @@ import { BottomNav } from '@/components/navigation/bottom-nav';
 import { IMCGauge } from '@/components/metrics/IMC';
 import { useAuth } from '@/hooks/use-auth';
 import { authStore } from '@/store/auth.store';
+import { apiClient } from '@/services/api.client';
 
 // Componente Anillo Circular para Porcentajes
 const PercentageRing = ({ percentage, color, label, unit }: { percentage: number; color: string; label: string; unit: string }) => {
@@ -153,6 +154,7 @@ const calcularIMC = (peso: number, altura: number): string => {
 export default function DatosMedicosScreen() {
   const { logout, isLoading } = useAuth();
   const [user, setUser] = useState<any>(null);
+  const [userEval, setUserEval] = useState<any>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<{ [key: string]: boolean }>({
@@ -171,24 +173,40 @@ export default function DatosMedicosScreen() {
   };
 
   useEffect(() => {
+    let mounted = true;
     const loadUser = async () => {
       try {
         const userData = await authStore.getUser();
-        setUser(userData);
+        if (mounted) setUser(userData);
+
+        try {
+          const evalRes = await apiClient.get('/clinical-evaluations/me/history');
+          if (mounted && evalRes.data?.data && Array.isArray(evalRes.data.data) && evalRes.data.data.length > 0) {
+            setUserEval(evalRes.data.data[0]);
+          } else if (mounted && userData?.evaluacion_clinica) {
+            setUserEval(userData.evaluacion_clinica);
+          }
+        } catch (error) {
+          console.error("Error fetching clinical evaluation history:", error);
+          if (mounted && userData?.evaluacion_clinica) {
+            setUserEval(userData.evaluacion_clinica);
+          }
+        }
       } catch (error) {
         console.error('Error loading user:', error);
-        setErrorMessage('Los datos guardados están corruptos. Sesión reiniciada.');
+        if (mounted) setErrorMessage('Los datos guardados están corruptos. Sesión reiniciada.');
         try {
           await authStore.clearSession();
         } catch (clearError) {
           console.error('Error clearing session:', clearError);
         }
       } finally {
-        setLoadingUser(false);
+        if (mounted) setLoadingUser(false);
       }
     };
 
     loadUser();
+    return () => { mounted = false; };
   }, []);
 
   if (loadingUser) {
@@ -224,15 +242,17 @@ export default function DatosMedicosScreen() {
   const alimentos = onboarding.alimentos_preferidos || [];
   const deportes = onboarding.deportes || [];
 
-  const peso = user?.peso || 75;
-  const altura = user?.altura || 1.75;
-  const porcentajeGrasa = user?.porcentaje_grasa || 20;
-  const masaMuscular = user?.masa_muscular || 30;
-  const grasaVisceral = user?.grasa_visceral || 5;
-  const porcentajeAgua = user?.agua || 60;
-  const masaOsea = user?.masa_osea || 3.2;
-  const metabolismoBasal = user?.metabolismo_basal || 1600;
-  const imc = calcularIMC(peso, altura);
+  const peso = userEval?.peso_kg ? parseFloat(userEval.peso_kg) : (user?.peso || 75);
+  const altura = userEval?.altura_cm ? (parseFloat(userEval.altura_cm) / 100) : (user?.altura || 1.75);
+  const alturaVisual = userEval?.altura_cm ? parseFloat(userEval.altura_cm) / 100 : altura;
+  const porcentajeGrasa = userEval?.porcentaje_grasa ? parseFloat(userEval.porcentaje_grasa) : (user?.porcentaje_grasa || 20);
+  const porcentajeAgua = userEval?.agua_corporal_pct ? parseFloat(userEval.agua_corporal_pct) : (user?.agua || 60);
+  
+  const masaMuscular = userEval?.masa_muscular_kg ? parseFloat(userEval.masa_muscular_kg) : (user?.masa_muscular || 30);
+  const grasaVisceral = userEval?.grasa_visceral ? parseFloat(userEval.grasa_visceral) : (user?.grasa_visceral || 5);
+  const masaOsea = userEval?.masa_osea_kg ? parseFloat(userEval.masa_osea_kg) : (user?.masa_osea || 3.2);
+  const metabolismoBasal = userEval?.tmb_kcal ? Math.round(parseFloat(userEval.tmb_kcal)) : (user?.metabolismo_basal || 1600);
+  const imc = userEval?.imc || calcularIMC(peso, altura);
   const muscleMin = 20;
   const muscleMax = 50;
   const muscleProgress = Math.min(Math.max(((masaMuscular - muscleMin) / (muscleMax - muscleMin)) * 100, 0), 100);
@@ -396,14 +416,14 @@ export default function DatosMedicosScreen() {
                 <Text style={styles.bioIconText}>📏</Text>
               </View>
               <Text style={styles.bioLabel}>ALTURA</Text>
-              <Text style={styles.bioValueLarge}>{altura}m</Text>
+              <Text style={styles.bioValueLarge}>{alturaVisual.toFixed(2)}m</Text>
             </View>
             <View style={styles.bioDataCard}>
               <View style={styles.bioIconSmall}>
                 <Text style={styles.bioIconText}>⚖️</Text>
               </View>
               <Text style={styles.bioLabel}>PESO</Text>
-              <Text style={styles.bioValueLarge}>{peso}kg</Text>
+              <Text style={styles.bioValueLarge}>{peso.toFixed(1)}kg</Text>
             </View>
           </View>
 
@@ -562,7 +582,7 @@ export default function DatosMedicosScreen() {
                   <View
                     style={[
                       styles.boneMassMarker,
-                      { left: boneMassMarkerLeft, borderTopColor: boneMassStatusColor },
+                      { left: (boneMassMarkerLeft as any), borderTopColor: boneMassStatusColor },
                     ]}
                   />
                 </View>

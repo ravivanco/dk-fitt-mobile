@@ -25,7 +25,7 @@ export default function MenusScreen() {
             <View style={styles.mainCard}>
               <View style={styles.imageContainer}>
                 <View style={styles.iconLarge}>
-                  <MaterialCommunityIcons name="salad" size={60} color="#22a656" />
+                  <MaterialCommunityIcons name="food-apple" size={60} color="#22a656" />
                 </View>
               </View>
 

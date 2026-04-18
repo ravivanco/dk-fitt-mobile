@@ -1,5 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import { router } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -8,6 +8,11 @@ import Svg, { Circle } from 'react-native-svg';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
+import { apiClient } from '@/services/api.client';
+import {
+  CalorieDashboard,
+  loadCalorieDashboard
+} from '@/services/calorie.service';
 import { authStore } from '@/store/auth.store';
 
 type MacroRingProps = {
@@ -78,7 +83,7 @@ function MacroRing({ value, color, icon, label, status }: MacroRingProps) {
       <View style={styles.macroRingWrap}>
         <ProgressRing size={78} strokeWidth={6} progress={value / 100} trackColor="#edf0eb" progressColor={color} />
         <View style={styles.macroIconWrap}>
-          <Text style={[styles.macroIcon, { color }]}>{icon}</Text>
+          <Text style={styles.macroEmoji}>{icon}</Text>
         </View>
       </View>
       <Text style={styles.macroLabel}>{label}</Text>
@@ -90,46 +95,65 @@ function MacroRing({ value, color, icon, label, status }: MacroRingProps) {
 
 export default function HomeScreen() {
   const [userName, setUserName] = useState('Usuario');
-  const [planActive, setPlanActive] = useState(true);
+  const [userEval, setUserEval] = useState<any>(null);
+  const [dashboard, setDashboard] = useState<CalorieDashboard | null>(null);
 
   useEffect(() => {
     let mounted = true;
 
     const loadUserData = async () => {
       try {
-        // Obtener datos del usuario autenticado
         const user = await authStore.getUser();
-        
-        if (!mounted) {
-          return;
-        }
-
-        // Usar el nombre del usuario autenticado
+        if (!mounted) return;
         if (user?.nombres) {
           setUserName(user.nombres);
         }
-
-        // Obtener estado del plan
-        const storedPlan = await AsyncStorage.getItem('dkfit.planActive');
-        if (storedPlan === 'false') {
-          setPlanActive(false);
-        } else if (storedPlan === 'true') {
-          setPlanActive(true);
+        
+        try {
+          const evalRes = await apiClient.get('/clinical-evaluations/me/history');
+          if (mounted && evalRes.data?.data && Array.isArray(evalRes.data.data) && evalRes.data.data.length > 0) {
+            setUserEval(evalRes.data.data[0]);
+          } else if (user?.evaluacion_clinica) {
+            setUserEval(user.evaluacion_clinica);
+          }
+        } catch (error) {
+          console.error("Error fetching clinical evaluation history:", error);
+          if (user?.evaluacion_clinica) {
+            setUserEval(user.evaluacion_clinica);
+          }
         }
       } catch {
         if (mounted) {
           setUserName('Usuario');
-          setPlanActive(true);
         }
       }
     };
 
-    loadUserData();
+    void loadUserData();
 
     return () => {
       mounted = false;
     };
   }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      let active = true;
+
+      const loadDashboardState = async () => {
+        const nextDashboard = await loadCalorieDashboard();
+        if (active) {
+          setDashboard(nextDashboard);
+        }
+      };
+
+      void loadDashboardState();
+
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
 
   const today = useMemo(() => new Date(), []);
   const weekDays = useMemo(
@@ -152,6 +176,41 @@ export default function HomeScreen() {
     [today]
   );
 
+  const planActive = dashboard?.planActive ?? true;
+  
+  const dailyTarget = userEval?.calorias_diarias_calculadas ?? dashboard?.dailyTarget ?? 1771;
+  // TODO: Implementar lógica de reducción cuando se registren comidas
+  const calorieValue = dailyTarget; // Mostrar el total directamente
+  const calorieProgress = 1; // Barra completa
+  const calorieRingColor = '#1aa44f';
+  
+  const macroData = [
+    {
+      key: 'protein',
+      label: 'Proteina',
+      percent: userEval?.distribucion_proteinas_pct ?? 35, // Porcentaje objetivo validado
+      status: dashboard?.macros?.find(m => m.key === 'protein')?.status ?? 'Medio',
+      color: '#34c759',
+      icon: '🥩',
+    },
+    {
+      key: 'carbs',
+      label: 'Carbohidratos',
+      percent: userEval?.distribucion_carbohidratos_pct ?? 40,
+      status: dashboard?.macros?.find(m => m.key === 'carbs')?.status ?? 'Medio',
+      color: '#ff3b30',
+      icon: '🍞',
+    },
+    {
+      key: 'fat',
+      label: 'Grasas',
+      percent: userEval?.distribucion_grasas_pct ?? 25,
+      status: dashboard?.macros?.find(m => m.key === 'fat')?.status ?? 'Medio',
+      color: '#eab308',
+      icon: '🥑',
+    },
+  ];
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.wrapper}>
@@ -166,7 +225,7 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <View style={styles.calendarWrap}> 
+          <View style={styles.calendarWrap}>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -184,144 +243,113 @@ export default function HomeScreen() {
 
           <TouchableOpacity onPress={() => router.push('/control-calorico')} activeOpacity={0.7}>
             <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <View style={styles.titleRow}>
-                <View style={styles.flameCircle}>
-                  <MaterialCommunityIcons name="fire" size={14} color="#ff8a3d" />
+              <View style={styles.cardHeader}>
+                <View style={styles.titleRow}>
+                  <View style={styles.flameCircle}>
+                    <MaterialCommunityIcons name="fire" size={14} color="#ff8a3d" />
+                  </View>
+                  <Text style={styles.cardTitle}>Control Calorico</Text>
                 </View>
-                <Text style={styles.cardTitle}>Control Calorico</Text>
-              </View>
 
-              <View style={styles.planBadge}>
-                <View
-                  style={[
-                    styles.planIconCircle,
-                    { backgroundColor: planActive ? '#22a656' : '#e53935' },
-                  ]}>
-                  <MaterialCommunityIcons name="check" size={10} color="#ffffff" />
+                <View style={styles.planBadge}>
+                  <View
+                    style={[
+                      styles.planIconCircle,
+                      { backgroundColor: planActive ? '#22a656' : '#e53935' },
+                    ]}>
+                    <MaterialCommunityIcons name="check" size={10} color="#ffffff" />
+                  </View>
+                  <Text numberOfLines={1} style={styles.planText}>
+                    {planActive ? 'Plan activo' : 'Plan no activo'}
+                  </Text>
                 </View>
-                <Text numberOfLines={1} style={styles.planText}>
-                  {planActive ? 'Plan activo' : 'Plan no activo'}
-                </Text>
               </View>
-            </View>
 
-            <View style={styles.calorieRingWrap}>
-              <ProgressRing size={198} strokeWidth={14} progress={0.62} trackColor="#eceae6" progressColor="#1aa44f" />
-              <View style={styles.calorieInner}>
-                <Text style={styles.calorieValue}>750</Text>
-                <Text style={styles.calorieUnit}>kcal</Text>
+              <View style={styles.calorieRingWrap}>
+                <ProgressRing
+                  size={198}
+                  strokeWidth={14}
+                  progress={calorieProgress}
+                  trackColor="#eceae6"
+                  progressColor={calorieRingColor}
+                />
+                <View style={styles.calorieInner}>
+                  <Text style={styles.calorieValue}>{calorieValue}</Text>
+                  <Text style={styles.calorieUnit}>kcal</Text>
+                </View>
               </View>
-            </View>
 
-            <Text style={styles.sectionTitle}>Macros del dia</Text>
+              <Text style={styles.sectionTitle}>Macros del dia</Text>
 
-            <View style={styles.macrosRow}>
-              <MacroRing value={68} color="#34e323" icon="🥬" label="Proteina" status="Alto" />
-              <MacroRing value={52} color="#ff2020" icon="🍞" label="Carbohidratos" status="Medio" />
-              <MacroRing value={34} color="#e7b300" icon="🥑" label="Grasas" status="Bajo" />
-            </View>
+              <View style={styles.macrosRow}>
+                {macroData.map((macro) => (
+                  <MacroRing
+                  key={macro.key}
+                  value={macro.percent}
+                  color={macro.color}
+                  icon={
+                    macro.key === 'protein'
+                      ? '🥩'
+                      : macro.key === 'carbs'
+                        ? '🍞'
+                        : '🥑'
+                  }
+                  label={macro.label}
+                  status={macro.status}
+                />
+                ))}
+              </View>
             </View>
           </TouchableOpacity>
 
-          {/* Grid de Tarjetas - Mi Plan y Progreso */}
           <View style={styles.cardsGrid}>
-            {/* Mi Plan Card */}
-            <TouchableOpacity 
-              style={styles.gridCard}
-              onPress={() => router.push('/mi-plan')} 
-              activeOpacity={0.7}
-            >
+            <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/mi-plan')} activeOpacity={0.7}>
               <View style={styles.cardSmall}>
                 <View style={styles.iconContainerSmall}>
-                  <Image 
-                    source={require('@/assets/images/MiPlan.png')} 
-                    style={styles.cardImage}
-                    resizeMode="contain"
-                  />
+                  <Image source={require('@/assets/images/MiPlan.png')} style={styles.cardImage} resizeMode="contain" />
                 </View>
                 <View style={styles.cardContentWrapper}>
                   <Text style={styles.cardTitleSmall}>Mi plan</Text>
                   <Text style={styles.cardDescSmall}>Tu ruta personalizada para cumplir tus objetivos paso a paso.</Text>
                 </View>
-                <TouchableOpacity style={styles.buttonSmall} activeOpacity={0.7}>
-                  <Text style={styles.buttonTextSmall}>Continuar</Text>
-                </TouchableOpacity>
               </View>
             </TouchableOpacity>
 
-            {/* Progreso Card */}
-            <TouchableOpacity 
-              style={styles.gridCard}
-              onPress={() => router.push('/progreso')} 
-              activeOpacity={0.7}
-            >
+            <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/progreso')} activeOpacity={0.7}>
               <View style={styles.cardSmall}>
                 <View style={styles.iconContainerSmall}>
-                  <Image 
-                    source={require('@/assets/images/IMC.png')} 
-                    style={styles.cardImage}
-                    resizeMode="contain"
-                  />
+                  <Image source={require('@/assets/images/IMC.png')} style={styles.cardImage} resizeMode="contain" />
                 </View>
                 <View style={styles.cardContentWrapper}>
                   <Text style={styles.cardTitleSmall}>Progreso</Text>
                   <Text style={styles.cardDescSmall}>Revisa tu avance y compara tus resultados en el tiempo.</Text>
                 </View>
-                <TouchableOpacity style={styles.buttonSmall} activeOpacity={0.7}>
-                  <Text style={styles.buttonTextSmall}>Ver Logros</Text>
-                </TouchableOpacity>
               </View>
             </TouchableOpacity>
           </View>
 
-          {/* Grid de Tarjetas - Menus y Ejercicios */}
           <View style={styles.cardsGrid}>
-            {/* Menus Card */}
-            <TouchableOpacity 
-              style={styles.gridCard}
-              onPress={() => router.push('/menus')} 
-              activeOpacity={0.7}
-            >
+            <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/menus')} activeOpacity={0.7}>
               <View style={styles.cardSmall}>
                 <View style={styles.iconContainerSmall}>
-                  <Image 
-                    source={require('@/assets/images/Menu.png')} 
-                    style={styles.cardImage}
-                    resizeMode="contain"
-                  />
+                  <Image source={require('@/assets/images/Menu.png')} style={styles.cardImage} resizeMode="contain" />
                 </View>
                 <View style={styles.cardContentWrapper}>
                   <Text style={styles.cardTitleSmall}>Menus</Text>
                   <Text style={styles.cardDescSmall}>Opciones de comidas saludables adaptadas a tu plan diario.</Text>
                 </View>
-                <TouchableOpacity style={styles.buttonSmall} activeOpacity={0.7}>
-                  <Text style={styles.buttonTextSmall}>Explorar</Text>
-                </TouchableOpacity>
               </View>
             </TouchableOpacity>
 
-            {/* Ejercicios Card */}
-            <TouchableOpacity 
-              style={styles.gridCard}
-              onPress={() => router.push('/ejercicios')} 
-              activeOpacity={0.7}
-            >
+            <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/ejercicios')} activeOpacity={0.7}>
               <View style={styles.cardSmall}>
                 <View style={styles.iconContainerSmall}>
-                  <Image 
-                    source={require('@/assets/images/Ejercicios.png')} 
-                    style={styles.cardImage}
-                    resizeMode="contain"
-                  />
+                  <Image source={require('@/assets/images/Ejercicios.png')} style={styles.cardImage} resizeMode="contain" />
                 </View>
                 <View style={styles.cardContentWrapper}>
                   <Text style={styles.cardTitleSmall}>Ejercicios</Text>
                   <Text style={styles.cardDescSmall}>Rutinas guiadas para entrenar mejor y mantener constancia.</Text>
                 </View>
-                <TouchableOpacity style={styles.buttonSmall} activeOpacity={0.7}>
-                  <Text style={styles.buttonTextSmall}>Empezar</Text>
-                </TouchableOpacity>
               </View>
             </TouchableOpacity>
           </View>
@@ -384,7 +412,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#ef5444',
   },
   calendarRow: {
-    marginTop: 0,
     marginBottom: 10,
   },
   calendarWrap: {
@@ -489,60 +516,12 @@ const styles = StyleSheet.create({
     borderColor: '#ffd8be',
     backgroundColor: '#fff8f2',
   },
-  planCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#c3e8ca',
-    backgroundColor: '#f0f8f3',
-  },
-  menusCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#ffd8be',
-    backgroundColor: '#fff8f2',
-  },
-  ejerciciosCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#b3d9f2',
-    backgroundColor: '#f0f6fb',
-  },
-  progresoCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#f5e3a0',
-    backgroundColor: '#fffbf0',
-  },
   cardTitle: {
     color: '#101318',
     fontSize: 18,
     lineHeight: 22,
     fontWeight: '800',
     flexShrink: 1,
-  },
-  cardDescription: {
-    color: '#8e8579',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '500',
-    marginTop: 8,
-    paddingLeft: 38,
   },
   planBadge: {
     flexDirection: 'row',
@@ -634,7 +613,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#ece8e0',
   },
-  macroIcon: {
+  macroEmoji: {
     fontSize: 20,
   },
   macroLabel: {
@@ -684,12 +663,8 @@ const styles = StyleSheet.create({
   iconContainerSmall: {
     width: 140,
     height: 140,
-    borderRadius: 0,
-    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 0,
-    borderColor: 'transparent',
     marginBottom: 8,
   },
   cardImage: {
@@ -715,16 +690,13 @@ const styles = StyleSheet.create({
     color: '#8e8579',
     textAlign: 'center',
     lineHeight: 15,
-    marginBottom: 0,
     flex: 1,
   },
   buttonSmall: {
     width: '100%',
     paddingVertical: 12,
     borderRadius: 16,
-    backgroundColor: '#f5a623',
-    borderWidth: 0,
-    borderColor: 'transparent',
+    backgroundColor: '#fbd232',
     alignItems: 'center',
     marginTop: 0,
   },
@@ -732,15 +704,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#ffffff',
-  },
-  progressBar: {
-    display: 'none',
-  },
-  progressFill: {
-    display: 'none',
-  },
-  progressText: {
-    display: 'none',
   },
   bottomSpacer: {
     height: 6,

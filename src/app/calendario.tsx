@@ -7,7 +7,8 @@ import { FormBackgroundDecor } from '@/components/forms/components/form-backgrou
 import { BottomNav } from '@/components/navigation/bottom-nav';
 
 // Mock data - eventos por fecha
-const EVENTOS_MOCK = {
+// Mock data - eventos por fecha
+const EVENTOS_MOCK: Record<string, Array<{ id: number; tipo: string; nombre: string; hora: string; emoji: string; }>> = {
   '2026-04-15': [
     { id: 1, tipo: 'comida', nombre: 'Desayuno', hora: '08:00', emoji: '🥗' },
     { id: 2, tipo: 'ejercicio', nombre: 'Cardio', hora: '10:00', emoji: '💪' },
@@ -136,7 +137,7 @@ export default function CalendarioScreen() {
 
             {eventosDelDia.length > 0 ? (
               <View style={styles.eventsList}>
-                {eventosDelDia.map((evento) => (
+                {eventosDelDia.map((evento: any) => (
                   <View key={evento.id} style={styles.eventItem}>
                     <View style={styles.eventTime}>
                       <Text style={styles.eventEmoji}>{evento.emoji}</Text>
