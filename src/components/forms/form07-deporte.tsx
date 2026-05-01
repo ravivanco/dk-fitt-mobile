@@ -32,7 +32,7 @@ const OPTIONS: {
 
 export default function Form07Deporte() {
 	const router = useRouter();
-	const [selected, setSelected] = useState<SportLevel>('gym');
+	const [selected, setSelected] = useState<SportLevel | null>(null);
 	const [isSaving, setIsSaving] = useState(false);
 	const { data, updateData, resetData } = useOnboarding();
 
@@ -48,7 +48,7 @@ export default function Form07Deporte() {
 	const selectedOption = useMemo(() => OPTIONS.find((o) => o.id === selected), [selected]);
 
 	const handleContinue = async () => {
-		if (isSaving) return;
+		if (!selected || isSaving) return;
 		setIsSaving(true);
 
 		try {
@@ -93,16 +93,22 @@ export default function Form07Deporte() {
 				}
 			}
 
-			const message = backendData
-				? JSON.stringify(backendData)
-				: error instanceof Error
-					? error.message
-					: 'Error al guardar tu perfil. Intenta de nuevo.';
+			// Si es un error de validación local (campo vacío), mostrar mensaje directo
+			const isLocalValidation = error instanceof Error && !backendData;
+			const message = isLocalValidation
+				? (error as Error).message
+				: backendData
+					? JSON.stringify(backendData)
+					: error instanceof Error
+						? error.message
+						: 'Error al guardar tu perfil. Intenta de nuevo.';
 
 			Alert.alert(
-				'Error al guardar',
+				isLocalValidation ? 'Paso incompleto' : 'Error al guardar',
 				message,
-				[{ text: 'Reintentar', onPress: () => setIsSaving(false) }],
+				isLocalValidation
+					? [{ text: 'Volver', onPress: () => router.back() }]
+					: [{ text: 'Reintentar', onPress: () => setIsSaving(false) }],
 			);
 		} finally {
 			setIsSaving(false);
@@ -183,12 +189,12 @@ export default function Form07Deporte() {
 							colors={['#ecb607', '#f6c510', '#fbd232']}
 							start={{ x: 0, y: 0 }}
 							end={{ x: 1, y: 0 }}
-							style={styles.continueGradient}>
+							style={[styles.continueGradient, (!selected || isSaving) && { opacity: 0.45 }]}>
 							<TouchableOpacity
 								style={styles.continueButton}
 								activeOpacity={0.9}
 								onPress={handleContinue}
-								disabled={isSaving}>
+								disabled={!selected || isSaving}>
 								{isSaving
 									? <ActivityIndicator color="#fdfcf9" />
 									: <Text style={styles.continueText}>Finalizar</Text>

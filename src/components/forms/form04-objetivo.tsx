@@ -49,7 +49,7 @@ const OPTIONS: {
 
 export default function Form04Objetivo() {
 	const router = useRouter();
-	const [selected, setSelected] = useState<Objective>('reducir');
+	const [selected, setSelected] = useState<Objective | null>(null);
 	const { updateData } = useOnboarding();
 
 	const objetivoMap = {
@@ -61,6 +61,7 @@ export default function Form04Objetivo() {
 	const selectedOption = useMemo(() => OPTIONS.find((o) => o.id === selected), [selected]);
 
 	const handleContinue = () => {
+		if (!selected) return;
 		updateData({ objetivo: objetivoMap[selected] });
 		router.push('/formularios/form05' as Href);
 	};
@@ -139,8 +140,8 @@ export default function Form04Objetivo() {
 							colors={['#ecb607', '#f6c510', '#fbd232']}
 							start={{ x: 0, y: 0 }}
 							end={{ x: 1, y: 0 }}
-							style={styles.continueGradient}>
-							<TouchableOpacity style={styles.continueButton} activeOpacity={0.9} onPress={handleContinue}>
+							style={[styles.continueGradient, !selected && { opacity: 0.45 }]}>
+							<TouchableOpacity style={styles.continueButton} activeOpacity={0.9} onPress={handleContinue} disabled={!selected}>
 								<Text style={styles.continueText}>Continuar</Text>
 							</TouchableOpacity>
 						</LinearGradient>

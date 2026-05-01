@@ -200,6 +200,24 @@ export const profileService = {
    */
   async saveOnboardingProfile(formData: OnboardingData): Promise<void> {
 
+    // ── Validar campos requeridos ─────────────────────────────────
+    if (!formData.nivel_actividad_fisica) {
+      throw new Error(
+        'Debes seleccionar tu nivel de actividad física (Paso 1) antes de finalizar.'
+      );
+    }
+    if (!formData.objetivo) {
+      throw new Error(
+        'Debes seleccionar tu objetivo principal (Paso 4) antes de finalizar.'
+      );
+    }
+    if (!formData.condicion_medica) {
+      throw new Error(
+        'Debes indicar tu condición médica (Paso 2) antes de finalizar.'
+      );
+    }
+    // ──────────────────────────────────────────────────────────────
+
     const foodIdMap = await fetchFoodIdMap();
 
     const safePreferidos = Array.isArray(formData.alimentos_preferidos)

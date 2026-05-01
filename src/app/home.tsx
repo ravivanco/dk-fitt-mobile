@@ -2,7 +2,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { router } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 
@@ -116,8 +116,17 @@ export default function HomeScreen() {
           } else if (user?.evaluacion_clinica) {
             setUserEval(user.evaluacion_clinica);
           }
-        } catch (error) {
-          console.error("Error fetching clinical evaluation history:", error);
+        } catch (error: any) {
+          // 401 = sin sesión activa aún, es esperado si el token no está listo todavía
+          const isAuthError =
+            error?.status === 401 ||
+            (typeof error?.message === 'string' &&
+              (error.message.includes('Token') || error.message.includes('acceso') || error.message.includes('Credenciales')));
+
+          if (!isAuthError && __DEV__) {
+            console.warn('[home] Clinical eval fetch failed:', error?.message ?? error);
+          }
+
           if (user?.evaluacion_clinica) {
             setUserEval(user.evaluacion_clinica);
           }
@@ -177,36 +186,40 @@ export default function HomeScreen() {
   );
 
   const planActive = dashboard?.planActive ?? true;
-  
-  const dailyTarget = userEval?.calorias_diarias_calculadas ?? dashboard?.dailyTarget ?? 1771;
-  // TODO: Implementar lógica de reducción cuando se registren comidas
-  const calorieValue = dailyTarget; // Mostrar el total directamente
-  const calorieProgress = 1; // Barra completa
-  const calorieRingColor = '#1aa44f';
-  
+
+  // Paciente nuevo sin evaluación clínica → la nutricionista no ha ingresado datos aún
+  const hasEval = userEval !== null;
+
+  const dailyTarget = hasEval
+    ? (userEval?.calorias_diarias_calculadas ?? dashboard?.dailyTarget ?? 1771)
+    : 0;
+  const calorieValue = hasEval ? dailyTarget : 0;
+  const calorieProgress = hasEval ? 1 : 0;
+  const calorieRingColor = hasEval ? '#1aa44f' : '#d9d4cc';
+
   const macroData = [
     {
       key: 'protein',
       label: 'Proteina',
-      percent: userEval?.distribucion_proteinas_pct ?? 35, // Porcentaje objetivo validado
-      status: dashboard?.macros?.find(m => m.key === 'protein')?.status ?? 'Medio',
-      color: '#34c759',
+      percent: hasEval ? (userEval?.distribucion_proteinas_pct ?? 35) : 0,
+      status: hasEval ? (dashboard?.macros?.find(m => m.key === 'protein')?.status ?? 'Medio') : '–',
+      color: hasEval ? '#34c759' : '#d9d4cc',
       icon: '🥩',
     },
     {
       key: 'carbs',
       label: 'Carbohidratos',
-      percent: userEval?.distribucion_carbohidratos_pct ?? 40,
-      status: dashboard?.macros?.find(m => m.key === 'carbs')?.status ?? 'Medio',
-      color: '#ff3b30',
+      percent: hasEval ? (userEval?.distribucion_carbohidratos_pct ?? 40) : 0,
+      status: hasEval ? (dashboard?.macros?.find(m => m.key === 'carbs')?.status ?? 'Medio') : '–',
+      color: hasEval ? '#ff3b30' : '#d9d4cc',
       icon: '🍞',
     },
     {
       key: 'fat',
       label: 'Grasas',
-      percent: userEval?.distribucion_grasas_pct ?? 25,
-      status: dashboard?.macros?.find(m => m.key === 'fat')?.status ?? 'Medio',
-      color: '#eab308',
+      percent: hasEval ? (userEval?.distribucion_grasas_pct ?? 25) : 0,
+      status: hasEval ? (dashboard?.macros?.find(m => m.key === 'fat')?.status ?? 'Medio') : '–',
+      color: hasEval ? '#eab308' : '#d9d4cc',
       icon: '🥑',
     },
   ];
@@ -241,26 +254,39 @@ export default function HomeScreen() {
             </ScrollView>
           </View>
 
-          <TouchableOpacity onPress={() => router.push('/control-calorico')} activeOpacity={0.7}>
-            <View style={styles.card}>
+          <TouchableOpacity
+            onPress={() => {
+              if (!hasEval) {
+                Alert.alert(
+                  'Módulo bloqueado',
+                  'Tu nutricionista activará el Control Calórico después de tu primera consulta.',
+                  [{ text: 'Entendido' }]
+                );
+                return;
+              }
+              router.push('/control-calorico');
+            }}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.card, !hasEval && styles.cardLocked]}>
               <View style={styles.cardHeader}>
                 <View style={styles.titleRow}>
                   <View style={styles.flameCircle}>
-                    <MaterialCommunityIcons name="fire" size={14} color="#ff8a3d" />
+                    <MaterialCommunityIcons name="fire" size={14} color={hasEval ? '#ff8a3d' : '#c8c3bb'} />
                   </View>
-                  <Text style={styles.cardTitle}>Control Calorico</Text>
+                  <Text style={[styles.cardTitle, !hasEval && { color: '#c8c3bb' }]}>Control Calorico</Text>
                 </View>
 
                 <View style={styles.planBadge}>
                   <View
                     style={[
                       styles.planIconCircle,
-                      { backgroundColor: planActive ? '#22a656' : '#e53935' },
+                      { backgroundColor: hasEval ? (planActive ? '#22a656' : '#e53935') : '#c8c3bb' },
                     ]}>
-                    <MaterialCommunityIcons name="check" size={10} color="#ffffff" />
+                    <MaterialCommunityIcons name={hasEval ? 'check' : 'lock'} size={10} color="#ffffff" />
                   </View>
                   <Text numberOfLines={1} style={styles.planText}>
-                    {planActive ? 'Plan activo' : 'Plan no activo'}
+                    {hasEval ? (planActive ? 'Plan activo' : 'Plan no activo') : 'Pendiente'}
                   </Text>
                 </View>
               </View>
@@ -274,43 +300,81 @@ export default function HomeScreen() {
                   progressColor={calorieRingColor}
                 />
                 <View style={styles.calorieInner}>
-                  <Text style={styles.calorieValue}>{calorieValue}</Text>
-                  <Text style={styles.calorieUnit}>kcal</Text>
+                  <Text style={[styles.calorieValue, !hasEval && { color: '#c8c3bb' }]}>
+                    {hasEval ? calorieValue : '–'}
+                  </Text>
+                  <Text style={[styles.calorieUnit, !hasEval && { color: '#d9d4cc' }]}>
+                    {hasEval ? 'kcal' : ''}
+                  </Text>
                 </View>
               </View>
 
-              <Text style={styles.sectionTitle}>Macros del dia</Text>
+              {!hasEval && (
+                <View style={styles.lockedBanner}>
+                  <MaterialCommunityIcons name="lock-outline" size={15} color="#b5afa6" />
+                  <Text style={styles.lockedBannerText}>
+                    Disponible después de tu primera consulta
+                  </Text>
+                </View>
+              )}
+
+              <Text style={[styles.sectionTitle, !hasEval && { color: '#d9d4cc' }]}>Macros del dia</Text>
 
               <View style={styles.macrosRow}>
                 {macroData.map((macro) => (
                   <MacroRing
-                  key={macro.key}
-                  value={macro.percent}
-                  color={macro.color}
-                  icon={
-                    macro.key === 'protein'
-                      ? '🥩'
-                      : macro.key === 'carbs'
-                        ? '🍞'
-                        : '🥑'
-                  }
-                  label={macro.label}
-                  status={macro.status}
-                />
+                    key={macro.key}
+                    value={macro.percent}
+                    color={macro.color}
+                    icon={
+                      macro.key === 'protein'
+                        ? '🥩'
+                        : macro.key === 'carbs'
+                          ? '🍞'
+                          : '🥑'
+                    }
+                    label={macro.label}
+                    status={macro.status}
+                  />
                 ))}
               </View>
             </View>
           </TouchableOpacity>
 
           <View style={styles.cardsGrid}>
-            <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/mi-plan')} activeOpacity={0.7}>
-              <View style={styles.cardSmall}>
+            <TouchableOpacity
+              style={styles.gridCard}
+              onPress={() => {
+                if (!hasEval) {
+                  Alert.alert(
+                    'Módulo bloqueado',
+                    'Tu nutricionista activará Mi Plan después de tu primera consulta.',
+                    [{ text: 'Entendido' }]
+                  );
+                  return;
+                }
+                router.push('/mi-plan');
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.cardSmall, !hasEval && styles.cardSmallLocked]}>
                 <View style={styles.iconContainerSmall}>
-                  <Image source={require('@/assets/images/MiPlan.png')} style={styles.cardImage} resizeMode="contain" />
+                  <Image
+                    source={require('@/assets/images/MiPlan.png')}
+                    style={[styles.cardImage, !hasEval && { opacity: 0.35 }]}
+                    resizeMode="contain"
+                  />
                 </View>
                 <View style={styles.cardContentWrapper}>
-                  <Text style={styles.cardTitleSmall}>Mi plan</Text>
-                  <Text style={styles.cardDescSmall}>Tu ruta personalizada para cumplir tus objetivos paso a paso.</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                    <Text style={[styles.cardTitleSmall, { marginBottom: 0 }, !hasEval && { color: '#c8c3bb' }]}>Mi plan</Text>
+                    {!hasEval && <MaterialCommunityIcons name="lock-outline" size={14} color="#c8c3bb" />}
+                  </View>
+                  <Text style={[styles.cardDescSmall, !hasEval && { color: '#d9d4cc' }]}>
+                    {hasEval
+                      ? 'Tu ruta personalizada para cumplir tus objetivos paso a paso.'
+                      : 'Disponible tras tu primera consulta.'}
+                  </Text>
                 </View>
               </View>
             </TouchableOpacity>
@@ -331,8 +395,8 @@ export default function HomeScreen() {
           <View style={styles.cardsGrid}>
             <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/menus')} activeOpacity={0.7}>
               <View style={styles.cardSmall}>
-                <View style={styles.iconContainerSmall}>
-                  <Image source={require('@/assets/images/Menu.png')} style={styles.cardImage} resizeMode="contain" />
+                <View style={styles.iconContainerCover}>
+                  <Image source={require('@/assets/images/Menu.png')} style={styles.cardImageCover} resizeMode="cover" />
                 </View>
                 <View style={styles.cardContentWrapper}>
                   <Text style={styles.cardTitleSmall}>Menus</Text>
@@ -647,50 +711,60 @@ const styles = StyleSheet.create({
   },
   cardSmall: {
     backgroundColor: '#ffffff',
-    borderRadius: 20,
+    borderRadius: 18,
     borderWidth: 1.5,
     borderColor: '#efebe4',
-    padding: 16,
-    alignItems: 'center',
+    alignItems: 'stretch',
     shadowColor: '#120f08',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 6,
     elevation: 2,
-    height: 320,
-    justifyContent: 'space-between',
+    overflow: 'hidden',
+    height: 290,
   },
   iconContainerSmall: {
-    width: 140,
-    height: 140,
+    width: '100%',
+    aspectRatio: 1.15,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
+    backgroundColor: '#fcfbf9',
+    padding: 12,
+  },
+  iconContainerCover: {
+    width: '100%',
+    aspectRatio: 1.15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fcfbf9',
+    padding: 0,
   },
   cardImage: {
-    width: 130,
-    height: 130,
+    width: '90%',
+    height: '90%',
+  },
+  cardImageCover: {
+    width: '100%',
+    height: '100%',
   },
   cardTitleSmall: {
     fontSize: 16,
     fontWeight: '800',
     color: '#0f1115',
-    marginTop: 10,
     marginBottom: 6,
-    textAlign: 'center',
+    textAlign: 'left',
   },
   cardContentWrapper: {
+    padding: 14,
+    paddingTop: 10,
+    backgroundColor: '#ffffff',
     flex: 1,
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   cardDescSmall: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#8e8579',
-    textAlign: 'center',
-    lineHeight: 15,
-    flex: 1,
+    textAlign: 'left',
+    lineHeight: 16,
   },
   buttonSmall: {
     width: '100%',
@@ -704,6 +778,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  cardLocked: {
+    opacity: 0.82,
+  },
+  cardSmallLocked: {
+    opacity: 0.82,
+  },
+  lockedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f5f3f0',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginTop: 8,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: '#e8e4dd',
+  },
+  lockedBannerText: {
+    color: '#b5afa6',
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
   },
   bottomSpacer: {
     height: 6,

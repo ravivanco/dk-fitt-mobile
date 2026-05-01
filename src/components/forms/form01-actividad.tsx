@@ -57,13 +57,13 @@ const OPTIONS: {
 
 export default function Form01Actividad() {
 	const router = useRouter();
-	const [selected, setSelected] = useState<ActivityLevel>('mediano');
+	const [selected, setSelected] = useState<ActivityLevel | null>(null);
 	const { updateData } = useOnboarding();
 
 	const selectedOption = useMemo(() => OPTIONS.find((o) => o.id === selected), [selected]);
 
 	const handleContinue = () => {
-		// Guardar en el contexto global antes de navegar
+		if (!selected) return;
 		updateData({ nivel_actividad_fisica: selected === 'mediano' ? 'medio' : selected });
 		router.push('/formularios/form02' as Href);
 	};
@@ -142,8 +142,8 @@ export default function Form01Actividad() {
 							colors={['#ecb607', '#f6c510', '#fbd232']}
 							start={{ x: 0, y: 0 }}
 							end={{ x: 1, y: 0 }}
-							style={styles.continueGradient}>
-							<TouchableOpacity style={styles.continueButton} activeOpacity={0.9} onPress={handleContinue}>
+							style={[styles.continueGradient, !selected && { opacity: 0.45 }]}>
+							<TouchableOpacity style={styles.continueButton} activeOpacity={0.9} onPress={handleContinue} disabled={!selected}>
 								<Text style={styles.continueText}>Continuar</Text>
 							</TouchableOpacity>
 						</LinearGradient>

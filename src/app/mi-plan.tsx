@@ -11,11 +11,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Circle } from 'react-native-svg';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
-import { CalorieDashboard, getCalorieProgress, loadCalorieDashboard } from '@/services/calorie.service';
+import { loadCalorieDashboard } from '@/services/calorie.service';
 import {
   DayKey,
   ExercisePlan,
@@ -23,132 +22,140 @@ import {
   PlanMeal,
   WeeklyPlan,
   loadWeeklyPlan,
-  selectMenuOption,
   updateExerciseStatus,
   updateMealStatus,
 } from '@/services/plan.service';
 
-function ProgressRing({
-  size,
-  strokeWidth,
-  progress,
-  trackColor,
-  progressColor,
+// ─── Calendar helpers ────────────────────────────────────────────────────────
+
+const MONTHS_ES = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
+const WEEKDAYS_ES = ['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'];
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+// ─── Week calendar component (same style as home.tsx) ─────────────────────
+
+function WeekCalendar({
+  activeDayKey,
+  onSelectDay,
+  weeklyPlan,
 }: {
-  size: number;
-  strokeWidth: number;
-  progress: number;
-  trackColor: string;
-  progressColor: string;
+  activeDayKey: DayKey;
+  onSelectDay: (key: DayKey) => void;
+  weeklyPlan: WeeklyPlan;
 }) {
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const clamped = Math.max(0, Math.min(1, progress));
-  const offset = circumference * (1 - clamped);
+  const today = useMemo(() => new Date(), []);
+
+  const calendarDays = useMemo(
+    () =>
+      Array.from({ length: 7 }, (_, index) => {
+        const date = addDays(today, index - 3);
+        const isToday =
+          date.getDate() === today.getDate() &&
+          date.getMonth() === today.getMonth() &&
+          date.getFullYear() === today.getFullYear();
+
+        // Map date to day key
+        const jsDay = date.getDay();
+        const dayKeyMap: Record<number, DayKey> = {
+          1: 'monday',
+          2: 'tuesday',
+          3: 'wednesday',
+          4: 'thursday',
+          5: 'friday',
+        };
+        const dayKey = dayKeyMap[jsDay] ?? null;
+        const isSelectable = !!dayKey;
+        const isActive = dayKey === activeDayKey;
+
+        return {
+          key: `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`,
+          month: MONTHS_ES[date.getMonth()],
+          day: date.getDate(),
+          weekday: WEEKDAYS_ES[date.getDay()],
+          isToday,
+          isSelectable,
+          dayKey,
+          isActive,
+        };
+      }),
+    [today, activeDayKey],
+  );
 
   return (
-    <Svg width={size} height={size}>
-      <Circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        stroke={trackColor}
-        strokeWidth={strokeWidth}
-        fill="transparent"
-      />
-      <Circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        stroke={progressColor}
-        strokeWidth={strokeWidth}
-        fill="transparent"
-        strokeDasharray={`${circumference} ${circumference}`}
-        strokeDashoffset={offset}
-        strokeLinecap="round"
-        origin={`${size / 2}, ${size / 2}`}
-        rotation={-90}
-      />
-    </Svg>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.calendarContent}
+      style={styles.calendarRow}
+    >
+      {calendarDays.map((item) => (
+        <TouchableOpacity
+          key={item.key}
+          activeOpacity={item.isSelectable ? 0.7 : 1}
+          onPress={() => {
+            if (item.isSelectable && item.dayKey) {
+              onSelectDay(item.dayKey);
+            }
+          }}
+        >
+          <View
+            style={[
+              styles.dayCard,
+              item.isActive && styles.dayCardActive,
+              !item.isSelectable && styles.dayCardDisabled,
+            ]}
+          >
+            <Text style={[styles.monthText, item.isActive && styles.monthTextActive]}>{item.month}</Text>
+            <Text style={[styles.dayNumber, item.isActive && styles.dayNumberActive]}>{item.day}</Text>
+            <Text style={[styles.weekdayText, item.isActive && styles.weekdayTextActive]}>{item.weekday}</Text>
+            {item.isToday && !item.isActive && <View style={styles.todayDot} />}
+          </View>
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
   );
 }
 
-function MacroRing({
-  percent,
-  color,
-  emoji,
-  label,
-  status,
-}: {
-  percent: number;
-  color: string;
-  emoji: string;
-  label: string;
-  status: string;
-}) {
-  return (
-    <View style={styles.macroCard}>
-      <View style={styles.macroRingWrap}>
-        <ProgressRing size={82} strokeWidth={7} progress={percent / 100} trackColor="#ece9e2" progressColor={color} />
-        <View style={styles.macroCenter}>
-          <Text style={styles.macroEmoji}>{emoji}</Text>
-        </View>
-      </View>
-      <Text style={styles.macroTitle}>{label}</Text>
-      <Text style={[styles.macroValue, { color }]}>{percent}%</Text>
-      <Text style={[styles.macroStatus, { color }]}>{status}</Text>
-    </View>
-  );
-}
+// ─── Dual Action Buttons (✓ verde + ✗ rojo, siempre visibles) ───────────────
 
-function DecisionButtons({
+function DualActionButtons({
   value,
   onChange,
 }: {
   value: 'done' | 'skip' | null;
-  onChange: (next: 'done' | 'skip') => void;
+  onChange: (next: 'done' | 'skip' | null) => void;
 }) {
+  const handleDone = () => onChange(value === 'done' ? null : 'done');
+  const handleSkip = () => onChange(value === 'skip' ? null : 'skip');
+
   return (
-    <View style={styles.decisionRow}>
+    <View style={styles.dualBtns}>
       <TouchableOpacity
-        style={[styles.decisionButton, value === 'done' && styles.decisionButtonActive]}
-        onPress={() => onChange('done')}>
-        <Text style={styles.decisionEmoji}>✓</Text>
+        style={[styles.dualBtn, styles.dualBtnCheck, value === 'done' && styles.dualBtnCheckActive]}
+        onPress={handleDone}
+        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+        activeOpacity={0.75}
+      >
+        <MaterialCommunityIcons name="check" size={17} color={value === 'done' ? '#ffffff' : '#1aa44f'} />
       </TouchableOpacity>
       <TouchableOpacity
-        style={[styles.decisionButton, value === 'skip' && styles.decisionButtonSkip]}
-        onPress={() => onChange('skip')}>
-        <Text style={styles.decisionEmoji}>✕</Text>
+        style={[styles.dualBtn, styles.dualBtnSkip, value === 'skip' && styles.dualBtnSkipActive]}
+        onPress={handleSkip}
+        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+        activeOpacity={0.75}
+      >
+        <MaterialCommunityIcons name="close" size={17} color={value === 'skip' ? '#ffffff' : '#ef4444'} />
       </TouchableOpacity>
     </View>
   );
 }
 
-function ExerciseCard({
-  exercise,
-  status,
-  onChange,
-}: {
-  exercise: ExercisePlan;
-  status: 'done' | 'skip' | null;
-  onChange: (next: 'done' | 'skip') => void;
-}) {
-  return (
-    <View style={styles.exerciseCard}>
-      <View style={styles.exerciseHeader}>
-        <View style={styles.exerciseEmojiWrap}>
-          <Text style={styles.exerciseEmoji}>{exercise.emoji}</Text>
-        </View>
-        <View style={styles.exerciseTextWrap}>
-          <Text style={styles.exerciseTitle}>{exercise.title}</Text>
-          <Text style={styles.exerciseSubtext}>{exercise.duration} · {exercise.series} · {exercise.repetitions}</Text>
-        </View>
-        <DecisionButtons value={status} onChange={onChange} />
-      </View>
-      <Text style={styles.exerciseNote}>{exercise.notes}</Text>
-    </View>
-  );
-}
+// ─── Meal Card ─────────────────────────────────────────────────────────────
 
 function MealCard({
   meal,
@@ -161,63 +168,179 @@ function MealCard({
   status: 'done' | 'skip' | null;
   expanded: boolean;
   onToggleExpand: () => void;
-  onChange: (next: 'done' | 'skip') => void;
+  onChange: (next: 'done' | 'skip' | null) => void;
 }) {
   return (
-    <View style={styles.mealCard}>
+    <View style={[styles.mealCard, status === 'done' && styles.mealCardDone, status === 'skip' && styles.mealCardSkip]}>
+      {/* ── Header Row ── */}
       <View style={styles.mealHeader}>
-        <View style={styles.mealEmojiWrap}>
-          <Text style={styles.mealEmoji}>{meal.emoji}</Text>
+        {/* Circular avatar with emoji – swap <Text> for <Image> when ready */}
+        <View style={[styles.mealAvatar, status === 'done' && styles.mealAvatarDone, status === 'skip' && styles.mealAvatarSkip]}>
+          <Text style={[styles.mealEmoji, status === 'skip' && { opacity: 0.45 }]}>{meal.emoji}</Text>
         </View>
-        <View style={styles.mealTitleWrap}>
-          <Text style={styles.mealSlot}>{meal.slot}</Text>
-          <Text style={styles.mealTitle}>{meal.title}</Text>
-          <Text style={styles.mealCalories}>{meal.calories} kcal</Text>
+
+        {/* Center: Title block */}
+        <View style={styles.mealInfo}>
+          <Text style={[styles.mealTitle, status === 'skip' && styles.mealTitleSkip]} numberOfLines={2}>
+            {meal.title}
+          </Text>
+          <Text style={styles.mealSubtext} numberOfLines={1}>{meal.slot}</Text>
         </View>
-        <DecisionButtons value={status} onChange={onChange} />
+
+        {/* Right: kcal + dual buttons */}
+        <View style={styles.mealRight}>
+          <Text style={[styles.mealKcal, status === 'skip' && { color: '#b5aba0' }]}>{meal.calories}</Text>
+          <Text style={[styles.mealKcalUnit, status === 'skip' && { color: '#c8c2ba' }]}>kcal</Text>
+          <DualActionButtons value={status} onChange={onChange} />
+        </View>
       </View>
 
-      <TouchableOpacity style={styles.detailToggle} onPress={onToggleExpand}>
-        <Text style={styles.detailToggleText}>{expanded ? 'Ocultar detalle' : 'Ver ingredientes y preparacion'}</Text>
-        <MaterialCommunityIcons
-          name={expanded ? 'chevron-up' : 'chevron-down'}
-          size={18}
-          color="#9a9083"
-        />
+      {/* ── Expand toggle ── */}
+      <TouchableOpacity style={styles.expandToggle} onPress={onToggleExpand} activeOpacity={0.7}>
+        <Text style={styles.expandToggleText}>{expanded ? 'Ocultar detalle' : 'Ver ingredientes y preparación'}</Text>
+        <MaterialCommunityIcons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color="#b5aba0" />
       </TouchableOpacity>
 
+      {/* ── Expanded detail: card hero style ── */}
       {expanded && (
-        <View style={styles.mealDetailBox}>
-          <Text style={styles.mealDetailTitle}>Ingredientes</Text>
-          <Text style={styles.mealDetailText}>{meal.ingredients.join(', ')}</Text>
+        <View style={styles.detailBox}>
+          {/* Hero card with large emoji + meal info */}
+          <View style={styles.detailHero}>
+            <View style={styles.detailHeroImage}>
+              <Text style={styles.detailHeroEmoji}>{meal.emoji}</Text>
+            </View>
+            <View style={styles.detailHeroBody}>
+              <View style={styles.detailHeroTag}>
+                <View style={styles.detailHeroTagDot} />
+                <Text style={styles.detailHeroTagText}>{meal.slot.toUpperCase()}</Text>
+              </View>
+              <Text style={styles.detailHeroTitle}>{meal.title}</Text>
+              <View style={styles.detailHeroMeta}>
+                <MaterialCommunityIcons name="fire" size={12} color="#f5a623" />
+                <Text style={styles.detailHeroMetaText}>{meal.calories} kcal</Text>
+                <View style={styles.detailHeroMetaDivider} />
+                <MaterialCommunityIcons name="silverware-fork-knife" size={12} color="#9a9083" />
+                <Text style={styles.detailHeroMetaText}>Comida</Text>
+              </View>
+            </View>
+          </View>
 
-          <Text style={styles.mealDetailTitle}>Receta</Text>
-          <Text style={styles.mealDetailText}>{meal.recipe}</Text>
+          {/* Macro chips */}
+          <View style={styles.macroInfo}>
+            <View style={styles.macroInfoChip}>
+              <Text style={styles.macroInfoLabel}>Carbos</Text>
+              <Text style={[styles.macroInfoValue, { color: '#ef4444' }]}>{meal.macroImpact.carbs * 10}g</Text>
+            </View>
+            <View style={styles.macroInfoChip}>
+              <Text style={styles.macroInfoLabel}>Proteína</Text>
+              <Text style={[styles.macroInfoValue, { color: '#1aa44f' }]}>{meal.macroImpact.protein * 10}g</Text>
+            </View>
+            <View style={styles.macroInfoChip}>
+              <Text style={styles.macroInfoLabel}>Grasas</Text>
+              <Text style={[styles.macroInfoValue, { color: '#eab308' }]}>{meal.macroImpact.fat * 10}g</Text>
+            </View>
+          </View>
 
-          <Text style={styles.mealDetailTitle}>Preparacion</Text>
-          {meal.preparation.map((step) => (
-            <Text key={step} style={styles.mealDetailStep}>• {step}</Text>
-          ))}
+          {/* Ingredients list  */}
+          <View style={styles.detailSection}>
+            <View style={styles.detailSectionHeader}>
+              <MaterialCommunityIcons name="basket-outline" size={15} color="#1aa44f" />
+              <Text style={styles.detailSectionTitle}>Ingredientes</Text>
+            </View>
+            {meal.ingredients.map((ing, idx) => (
+              <View key={idx} style={styles.ingredientRow}>
+                <View style={styles.ingredientIconWrap}>
+                  <MaterialCommunityIcons name="circle-small" size={18} color="#9a9083" />
+                </View>
+                <Text style={styles.ingredientText}>{ing}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Preparation steps */}
+          <View style={styles.detailSection}>
+            <View style={styles.detailSectionHeader}>
+              <MaterialCommunityIcons name="chef-hat" size={15} color="#f5a623" />
+              <Text style={styles.detailSectionTitle}>Modo de Preparación</Text>
+            </View>
+            {meal.preparation.map((step, idx) => (
+              <View key={idx} style={styles.prepRow}>
+                <View style={[styles.prepNumber, idx === 0 && styles.prepNumberActive]}>
+                  <Text style={styles.prepNumberText}>{idx + 1}</Text>
+                </View>
+                <View style={styles.prepTextWrap}>
+                  <Text style={styles.prepText}>{step}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
         </View>
       )}
     </View>
   );
 }
 
+
+// ─── Exercise Card ─────────────────────────────────────────────────────────
+
+function ExerciseCard({
+  exercise,
+  status,
+  onChange,
+}: {
+  exercise: ExercisePlan;
+  status: 'done' | 'skip' | null;
+  onChange: (next: 'done' | 'skip' | null) => void;
+}) {
+  return (
+    <View style={[styles.exerciseCard, status === 'done' && styles.exerciseCardDone]}>
+      <View style={styles.exerciseHeader}>
+        <View style={[styles.exerciseAvatar, status === 'done' && styles.exerciseAvatarDone]}>
+          <Text style={styles.exerciseEmoji}>{exercise.emoji}</Text>
+        </View>
+        <View style={styles.exerciseInfo}>
+          <Text style={styles.exerciseTitle}>{exercise.title}</Text>
+          <View style={styles.exerciseBadges}>
+            <View style={styles.exerciseBadge}>
+              <MaterialCommunityIcons name="clock-outline" size={10} color="#8e8579" />
+              <Text style={styles.exerciseBadgeText}>{exercise.duration}</Text>
+            </View>
+            <View style={styles.exerciseBadge}>
+              <MaterialCommunityIcons name="repeat" size={10} color="#8e8579" />
+              <Text style={styles.exerciseBadgeText}>{exercise.series}</Text>
+            </View>
+            <View style={styles.exerciseBadge}>
+              <MaterialCommunityIcons name="numeric" size={10} color="#8e8579" />
+              <Text style={styles.exerciseBadgeText}>{exercise.repetitions}</Text>
+            </View>
+          </View>
+          {exercise.notes !== '' && <Text style={styles.exerciseNotes}>{exercise.notes}</Text>}
+        </View>
+        <DualActionButtons value={status} onChange={onChange} />
+      </View>
+    </View>
+  );
+}
+
+// ─── Main Screen ───────────────────────────────────────────────────────────
+
+type TabKey = 'menu' | 'ejercicios';
+
 export default function MiPlanScreen() {
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan | null>(null);
-  const [dashboard, setDashboard] = useState<CalorieDashboard | null>(null);
   const [activeDayKey, setActiveDayKey] = useState<DayKey>('monday');
+  const [activeTab, setActiveTab] = useState<TabKey>('menu');
   const [loading, setLoading] = useState(true);
   const [expandedMealIds, setExpandedMealIds] = useState<string[]>([]);
+  const [totalKcal, setTotalKcal] = useState<number>(0);
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
     try {
       const [nextPlan, nextDashboard] = await Promise.all([loadWeeklyPlan(), loadCalorieDashboard()]);
       setWeeklyPlan(nextPlan);
-      setDashboard(nextDashboard);
       setActiveDayKey(nextPlan.activeDayKey);
+      setTotalKcal(nextDashboard?.dailyTarget ?? nextPlan.days[0]?.targetCalories ?? 1800);
     } finally {
       setLoading(false);
     }
@@ -226,7 +349,7 @@ export default function MiPlanScreen() {
   useFocusEffect(
     React.useCallback(() => {
       void loadData();
-    }, [loadData])
+    }, [loadData]),
   );
 
   const activeDay = useMemo<PlanDay | null>(() => {
@@ -234,34 +357,34 @@ export default function MiPlanScreen() {
     return weeklyPlan.days.find((day) => day.key === activeDayKey) ?? weeklyPlan.days[0] ?? null;
   }, [activeDayKey, weeklyPlan]);
 
-  const calorieValue = dashboard?.consumedCalories ?? 770;
-  const calorieProgress = dashboard ? getCalorieProgress(dashboard) : 0.62;
-  const dailyTarget = dashboard?.dailyTarget ?? activeDay?.targetCalories ?? 1400;
-  const calorieRingColor = calorieValue > dailyTarget ? '#ef4444' : '#1aa44f';
-
   const toggleMealExpand = (mealId: string) => {
-    setExpandedMealIds((previous) =>
-      previous.includes(mealId) ? previous.filter((id) => id !== mealId) : [...previous, mealId],
+    setExpandedMealIds((prev) =>
+      prev.includes(mealId) ? prev.filter((id) => id !== mealId) : [...prev, mealId],
     );
   };
 
-  const refreshAfterPlanUpdate = async (nextPlanPromise: Promise<WeeklyPlan>) => {
-    const nextPlan = await nextPlanPromise;
-    const nextDashboard = await loadCalorieDashboard();
-    setWeeklyPlan(nextPlan);
-    setDashboard(nextDashboard);
+  const refreshAfterPlanUpdate = async (promise: Promise<WeeklyPlan>) => {
+    const next = await promise;
+    setWeeklyPlan(next);
   };
 
-  if (loading || !weeklyPlan || !activeDay || !dashboard) {
+  // ── Loading state ──
+  if (loading || !weeklyPlan || !activeDay) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top']}>
         <View style={styles.loadingWrapper}>
           <ActivityIndicator size="large" color="#1aa44f" />
-          <Text style={styles.loadingText}>Armando tu plan personalizado...</Text>
+          <Text style={styles.loadingText}>Preparando tu plan...</Text>
         </View>
       </SafeAreaView>
     );
   }
+
+  const completedMeals = activeDay.selectedMenu.meals.filter(
+    (m) => activeDay.mealStatuses[m.id] === 'done',
+  ).length;
+  const totalMeals = activeDay.selectedMenu.meals.length;
+  const progressPct = totalMeals > 0 ? Math.round((completedMeals / totalMeals) * 100) : 0;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -269,142 +392,129 @@ export default function MiPlanScreen() {
         <FormBackgroundDecor />
 
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+
+          {/* ── Header ── */}
           <View style={styles.header}>
             <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <MaterialCommunityIcons name="arrow-left" size={24} color="#0f1115" />
+              <MaterialCommunityIcons name="arrow-left" size={22} color="#0f1115" />
             </TouchableOpacity>
-            <View style={styles.headerTextWrap}>
-              <Text style={styles.title}>Mi Plan</Text>
-              <Text style={styles.subtitle}>Nutricion y ejercicio sugeridos de lunes a viernes</Text>
+            <Text style={styles.headerTitle}>Mi Plan</Text>
+            <View style={styles.headerAvatar}>
+              <MaterialCommunityIcons name="account-circle-outline" size={28} color="#8e8579" />
             </View>
           </View>
 
-          <View style={styles.heroCard}>
-            <View style={styles.ringWrap}>
-              <ProgressRing
-                size={206}
-                strokeWidth={15}
-                progress={calorieProgress}
-                trackColor="#ece9e2"
-                progressColor={calorieRingColor}
-              />
-              <View style={styles.ringInner}>
-                <Text style={styles.ringValue}>{calorieValue}</Text>
-                <Text style={styles.ringUnit}>kcal</Text>
-              </View>
-            </View>
-
-            <View style={styles.heroSide}>
-              <View style={styles.targetCard}>
-                <Text style={styles.targetLabel}>Meta sugerida</Text>
-                <Text style={styles.targetValue}>{activeDay.targetCalories} kcal</Text>
-                <Text style={styles.targetHint}>Calculada con objetivo, actividad y biometria</Text>
-              </View>
-
-              <View style={styles.summaryList}>
-                {weeklyPlan.summary.map((item) => (
-                  <View key={item} style={styles.summaryItem}>
-                    <View style={styles.summaryDot} />
-                    <Text style={styles.summaryText}>{item}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.macroSection}>
-            {dashboard.macros.map((macro) => (
-              <MacroRing
-                key={macro.key}
-                percent={macro.percent}
-                color={macro.color}
-                emoji={macro.key === 'protein' ? '🥩' : macro.key === 'carbs' ? '🍞' : '🥑'}
-                label={macro.label}
-                status={macro.status}
-              />
-            ))}
-          </View>
-
-          <View style={styles.dayTabsRow}>
-            {weeklyPlan.days.map((day) => (
+          {/* ── Menú / Ejercicios pill tabs ── */}
+          <View style={styles.pillTabsWrap}>
+            <View style={styles.pillTabs}>
               <TouchableOpacity
-                key={day.key}
-                style={[styles.dayTab, activeDayKey === day.key && styles.dayTabActive]}
-                onPress={() => setActiveDayKey(day.key)}>
-                <Text style={[styles.dayTabText, activeDayKey === day.key && styles.dayTabTextActive]}>
-                  {day.shortLabel}
+                style={[styles.pillTab, activeTab === 'menu' && styles.pillTabActive]}
+                onPress={() => setActiveTab('menu')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.pillTabText, activeTab === 'menu' && styles.pillTabTextActive]}>
+                  Menú
                 </Text>
               </TouchableOpacity>
-            ))}
-          </View>
-
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>5 opciones para {activeDay.label}</Text>
-              <Text style={styles.sectionNote}>Elige el menu que mejor se adapte a tu dia y luego marca cada comida con ✓ o ✕.</Text>
-            </View>
-
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
-              {activeDay.menuOptions.map((option) => {
-                const selected = option.id === activeDay.selectedMenuId;
-                return (
-                  <TouchableOpacity
-                    key={option.id}
-                    style={[styles.optionCard, selected && styles.optionCardSelected]}
-                    onPress={() => void refreshAfterPlanUpdate(selectMenuOption(activeDay.key, option.id))}>
-                    <View style={styles.optionTop}>
-                      <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>{option.label}</Text>
-                      {selected && (
-                        <View style={styles.optionSelectedBadge}>
-                          <Text style={styles.optionSelectedBadgeText}>Elegido</Text>
-                        </View>
-                      )}
-                    </View>
-                    <Text style={[styles.optionCalories, selected && styles.optionCaloriesSelected]}>{option.totalCalories} kcal</Text>
-                    <Text style={[styles.optionSummary, selected && styles.optionSummarySelected]}>{option.summary}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Menu seleccionado</Text>
-              <Text style={styles.sectionNote}>{activeDay.selectedMenu.label} · {activeDay.selectedMenu.totalCalories} kcal totales</Text>
-            </View>
-
-            <View style={styles.mealList}>
-              {activeDay.selectedMenu.meals.map((meal) => (
-                <MealCard
-                  key={meal.id}
-                  meal={meal}
-                  status={activeDay.mealStatuses[meal.id]}
-                  expanded={expandedMealIds.includes(meal.id)}
-                  onToggleExpand={() => toggleMealExpand(meal.id)}
-                  onChange={(next) => void refreshAfterPlanUpdate(updateMealStatus(meal, next))}
-                />
-              ))}
+              <TouchableOpacity
+                style={[styles.pillTab, activeTab === 'ejercicios' && styles.pillTabActive]}
+                onPress={() => setActiveTab('ejercicios')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.pillTabText, activeTab === 'ejercicios' && styles.pillTabTextActive]}>
+                  Ejercicios
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Rutina sugerida</Text>
-              <Text style={styles.sectionNote}>Ejercicios adaptados al deporte seleccionado en tu formulario.</Text>
-            </View>
-
-            <View style={styles.exerciseList}>
-              {activeDay.exercises.map((exercise) => (
-                <ExerciseCard
-                  key={exercise.id}
-                  exercise={exercise}
-                  status={activeDay.exerciseStatuses[exercise.id]}
-                  onChange={(next) => void refreshAfterPlanUpdate(updateExerciseStatus(exercise.id, next))}
-                />
-              ))}
-            </View>
+          {/* ── Week Calendar ── */}
+          <View style={styles.calendarWrap}>
+            <WeekCalendar
+              activeDayKey={activeDayKey}
+              onSelectDay={setActiveDayKey}
+              weeklyPlan={weeklyPlan}
+            />
           </View>
+
+          {/* ── NUTRITION TAB ── */}
+          {activeTab === 'menu' && (
+            <>
+              {/* Day summary header */}
+              <View style={styles.daySummaryRow}>
+                <View>
+                  <Text style={styles.daySummaryLabel}>NUTRICIÓN DIARIA</Text>
+                  <Text style={styles.daySummaryTitle}>Comidas de Hoy</Text>
+                </View>
+                <View style={styles.kcalBadge}>
+                  <Text style={styles.kcalValue}>{activeDay.selectedMenu.totalCalories.toLocaleString()}</Text>
+                  <Text style={styles.kcalUnit}>kcal totales</Text>
+                </View>
+              </View>
+
+              {/* Progress strip */}
+              <View style={styles.progressWrap}>
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+                </View>
+                <Text style={styles.progressLabel}>{completedMeals}/{totalMeals} comidas completadas</Text>
+              </View>
+
+              {/* Meal list */}
+              <View style={styles.mealList}>
+                {activeDay.selectedMenu.meals.map((meal) => (
+                  <MealCard
+                    key={meal.id}
+                    meal={meal}
+                    status={activeDay.mealStatuses[meal.id]}
+                    expanded={expandedMealIds.includes(meal.id)}
+                    onToggleExpand={() => toggleMealExpand(meal.id)}
+                    onChange={(next) => void refreshAfterPlanUpdate(updateMealStatus(meal, next ?? 'skip'))}
+                  />
+                ))}
+              </View>
+            </>
+          )}
+
+          {/* ── EXERCISES TAB ── */}
+          {activeTab === 'ejercicios' && (
+            <>
+              <View style={styles.daySummaryRow}>
+                <View>
+                  <Text style={styles.daySummaryLabel}>RUTINA SUGERIDA</Text>
+                  <Text style={styles.daySummaryTitle}>Ejercicios del Día</Text>
+                </View>
+                <View style={[styles.kcalBadge, { backgroundColor: '#eef6ff' }]}>
+                  <Text style={[styles.kcalValue, { color: '#2563eb' }]}>{activeDay.exercises.length}</Text>
+                  <Text style={[styles.kcalUnit, { color: '#6ea9f0' }]}>ejercicios</Text>
+                </View>
+              </View>
+
+              <View style={styles.exerciseList}>
+                {activeDay.exercises.map((exercise) => (
+                  <ExerciseCard
+                    key={exercise.id}
+                    exercise={exercise}
+                    status={activeDay.exerciseStatuses[exercise.id]}
+                    onChange={(next) =>
+                      void refreshAfterPlanUpdate(updateExerciseStatus(exercise.id, next ?? 'skip'))
+                    }
+                  />
+                ))}
+              </View>
+
+              {/* Empty state for weekend */}
+              {activeDay.exercises.length === 0 && (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyEmoji}>🧘</Text>
+                  <Text style={styles.emptyTitle}>Día de descanso</Text>
+                  <Text style={styles.emptySubtext}>No hay ejercicios asignados para este día. Descansa y recupérate.</Text>
+                </View>
+              )}
+            </>
+          )}
+
+          <View style={{ height: 20 }} />
         </ScrollView>
 
         <BottomNav />
@@ -412,6 +522,8 @@ export default function MiPlanScreen() {
     </SafeAreaView>
   );
 }
+
+// ─── Styles ────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   safeArea: {
@@ -437,456 +549,630 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     paddingHorizontal: 16,
-    paddingTop: 14,
+    paddingTop: 10,
     paddingBottom: 120,
-    gap: 16,
+    gap: 14,
   },
+
+  // ── Header ──────────────────────────
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    justifyContent: 'space-between',
+    paddingTop: 4,
   },
   backButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#efe6da',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#120f08',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  headerTextWrap: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 24,
+  headerTitle: {
+    fontSize: 20,
     fontWeight: '800',
     color: '#0f1115',
-  },
-  subtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: '#8f8578',
-    fontWeight: '600',
-  },
-  heroCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 28,
-    borderWidth: 1.5,
-    borderColor: '#efe8df',
-    padding: 18,
-    flexDirection: 'row',
-    gap: 16,
-    shadowColor: '#120f08',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  ringWrap: {
-    width: 206,
-    height: 206,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ringInner: {
-    position: 'absolute',
-    width: 136,
-    height: 136,
-    borderRadius: 68,
-    borderWidth: 2,
-    borderColor: '#f1ece5',
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ringValue: {
-    fontSize: 36,
-    lineHeight: 40,
-    color: '#11141b',
-    fontWeight: '900',
-  },
-  ringUnit: {
-    marginTop: 4,
-    fontSize: 18,
-    color: '#8f8578',
-    fontWeight: '700',
-  },
-  heroSide: {
     flex: 1,
-    gap: 12,
-    justifyContent: 'center',
+    textAlign: 'center',
   },
-  targetCard: {
+  headerAvatar: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    backgroundColor: '#faf6ee',
-    borderWidth: 1,
-    borderColor: '#ece2d3',
-    padding: 14,
-  },
-  targetLabel: {
-    fontSize: 12,
-    color: '#968b7d',
-    fontWeight: '700',
-  },
-  targetValue: {
-    marginTop: 6,
-    fontSize: 24,
-    color: '#11141b',
-    fontWeight: '900',
-  },
-  targetHint: {
-    marginTop: 6,
-    fontSize: 11,
-    lineHeight: 16,
-    color: '#8f8578',
-    fontWeight: '600',
-  },
-  summaryList: {
-    gap: 8,
-  },
-  summaryItem: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'flex-start',
-  },
-  summaryDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#1aa44f',
-    marginTop: 6,
-  },
-  summaryText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#5c554a',
-    fontWeight: '600',
-  },
-  macroSection: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  macroCard: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    borderRadius: 22,
-    borderWidth: 1.5,
-    borderColor: '#efe8df',
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    alignItems: 'center',
-  },
-  macroRingWrap: {
-    width: 82,
-    height: 82,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  macroCenter: {
-    position: 'absolute',
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: '#eee6da',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  macroEmoji: {
-    fontSize: 21,
-  },
-  macroTitle: {
-    marginTop: 8,
-    fontSize: 11,
-    color: '#1a1d21',
-    fontWeight: '700',
-  },
-  macroValue: {
-    marginTop: 4,
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  macroStatus: {
-    marginTop: 2,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  dayTabsRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  dayTab: {
-    flex: 1,
-    height: 42,
-    borderRadius: 16,
-    backgroundColor: '#f2ede6',
+    backgroundColor: '#f0ede8',
     borderWidth: 1,
     borderColor: '#e5ddd1',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dayTabActive: {
-    backgroundColor: '#11141b',
-    borderColor: '#11141b',
+
+  // ── Pill Tabs ────────────────────────
+  pillTabsWrap: {
+    alignItems: 'center',
   },
-  dayTabText: {
-    fontSize: 13,
-    color: '#736a5f',
-    fontWeight: '800',
+  pillTabs: {
+    flexDirection: 'row',
+    backgroundColor: '#eeeae3',
+    borderRadius: 22,
+    padding: 4,
+    gap: 4,
+    width: '100%',
   },
-  dayTabTextActive: {
-    color: '#ffffff',
+  pillTab: {
+    flex: 1,
+    height: 40,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  sectionCard: {
+  pillTabActive: {
     backgroundColor: '#ffffff',
-    borderRadius: 26,
-    borderWidth: 1.5,
-    borderColor: '#efe8df',
-    padding: 18,
     shadowColor: '#120f08',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
     elevation: 3,
   },
-  sectionHeader: {
-    marginBottom: 14,
+  pillTabText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#8e8579',
   },
-  sectionTitle: {
-    fontSize: 18,
-    color: '#11141b',
-    fontWeight: '800',
+  pillTabTextActive: {
+    color: '#0f1115',
   },
-  sectionNote: {
-    marginTop: 4,
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#908779',
-    fontWeight: '500',
+
+  // ── Calendar ────────────────────────
+  calendarWrap: {
+    marginHorizontal: -4,
   },
-  optionRow: {
-    gap: 12,
+  calendarRow: {
+    paddingBottom: 2,
   },
-  optionCard: {
-    width: 210,
-    borderRadius: 20,
-    backgroundColor: '#fcfaf6',
-    borderWidth: 1,
-    borderColor: '#f0e8dd',
-    padding: 14,
-  },
-  optionCardSelected: {
-    backgroundColor: '#11141b',
-    borderColor: '#11141b',
-  },
-  optionTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  calendarContent: {
+    paddingHorizontal: 4,
     gap: 8,
   },
-  optionTitle: {
-    fontSize: 15,
-    color: '#11141b',
-    fontWeight: '800',
-  },
-  optionTitleSelected: {
-    color: '#ffffff',
-  },
-  optionSelectedBadge: {
-    borderRadius: 12,
-    backgroundColor: '#1aa44f',
-    paddingHorizontal: 8,
+  dayCard: {
+    width: 56,
+    height: 76,
     paddingVertical: 6,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f5f3f0',
+    borderWidth: 1,
+    borderColor: '#e8e4dd',
+    position: 'relative',
   },
-  optionSelectedBadgeText: {
-    fontSize: 10,
-    color: '#ffffff',
-    fontWeight: '800',
+  dayCardActive: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#1aa44f',
+    shadowColor: '#1aa44f',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  optionCalories: {
-    marginTop: 12,
-    fontSize: 24,
+  dayCardDisabled: {
+    opacity: 0.35,
+  },
+  monthText: {
+    color: '#ccc8c0',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  monthTextActive: {
     color: '#1aa44f',
+  },
+  dayNumber: {
+    color: '#ccc8c0',
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  dayNumberActive: {
+    color: '#0f1115',
+  },
+  weekdayText: {
+    color: '#ccc8c0',
+    fontSize: 9,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  weekdayTextActive: {
+    color: '#f5a623',
+  },
+  todayDot: {
+    position: 'absolute',
+    bottom: 7,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#f5a623',
+  },
+
+  // ── Day Summary ──────────────────────
+  daySummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  daySummaryLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1aa44f',
+    letterSpacing: 0.6,
+  },
+  daySummaryTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f1115',
+    marginTop: 2,
+  },
+  kcalBadge: {
+    backgroundColor: '#edf9f3',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: 'flex-end',
+  },
+  kcalValue: {
+    fontSize: 20,
     fontWeight: '900',
+    color: '#1aa44f',
+    lineHeight: 22,
   },
-  optionCaloriesSelected: {
-    color: '#f5d46c',
+  kcalUnit: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#6dc48c',
   },
-  optionSummary: {
-    marginTop: 8,
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#7f7669',
+
+  // ── Progress strip ───────────────────
+  progressWrap: {
+    gap: 6,
+    marginTop: -4,
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#ece8e2',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
+    backgroundColor: '#1aa44f',
+  },
+  progressLabel: {
+    fontSize: 11,
+    color: '#9a9083',
     fontWeight: '600',
   },
-  optionSummarySelected: {
-    color: '#ddd2c3',
-  },
+
+  // ── Meal Cards ───────────────────────
   mealList: {
-    gap: 12,
+    gap: 10,
   },
   mealCard: {
+    backgroundColor: '#ffffff',
     borderRadius: 20,
-    backgroundColor: '#fcfaf6',
-    borderWidth: 1,
-    borderColor: '#f0e8dd',
-    padding: 14,
+    borderWidth: 1.5,
+    borderColor: '#efebe4',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    shadowColor: '#120f08',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  mealCardDone: {
+    borderColor: '#b9e8cb',
+    backgroundColor: '#f5fdf8',
+  },
+  mealCardSkip: {
+    borderColor: '#ede5e5',
+    backgroundColor: '#fdfafa',
+    opacity: 0.7,
   },
   mealHeader: {
     flexDirection: 'row',
-    gap: 12,
     alignItems: 'center',
+    gap: 14,
   },
-  mealEmojiWrap: {
-    width: 50,
-    height: 50,
-    borderRadius: 16,
-    backgroundColor: '#fff5ea',
+  mealAvatar: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#fdf8f2',
+    borderWidth: 1.5,
+    borderColor: '#ede5d8',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
+    overflow: 'hidden',
+  },
+  mealAvatarDone: {
+    borderColor: '#a8ddbf',
+    backgroundColor: '#f0fdf6',
   },
   mealEmoji: {
-    fontSize: 24,
+    fontSize: 28,
   },
-  mealTitleWrap: {
+  mealInfo: {
     flex: 1,
-  },
-  mealSlot: {
-    fontSize: 11,
-    color: '#a19485',
-    fontWeight: '800',
-    textTransform: 'uppercase',
+    minWidth: 0,
   },
   mealTitle: {
-    marginTop: 4,
-    fontSize: 14,
-    color: '#11141b',
+    fontSize: 15,
     fontWeight: '800',
+    color: '#0f1115',
+    lineHeight: 20,
   },
-  mealCalories: {
-    marginTop: 6,
-    fontSize: 13,
+  mealTitleSkip: {
+    textDecorationLine: 'line-through',
+    color: '#b5aba0',
+  },
+  mealSubtext: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#9a9083',
+    marginTop: 3,
+  },
+  mealRight: {
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 4,
+    minWidth: 54,
+  },
+  mealKcal: {
+    fontSize: 20,
+    fontWeight: '900',
     color: '#1aa44f',
-    fontWeight: '800',
+    lineHeight: 22,
   },
-  decisionRow: {
+  mealKcalUnit: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#6dc48c',
+    marginTop: -4,
+  },
+
+  // Expand toggle
+  expandToggle: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f0ece6',
+  },
+  expandToggleText: {
+    fontSize: 12,
+    color: '#b5aba0',
+    fontWeight: '600',
+  },
+
+  // Expanded detail box
+  detailBox: {
+    marginTop: 12,
+    gap: 12,
+  },
+  detailSection: {
+    gap: 6,
+  },
+  detailSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  detailSectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f1115',
+  },
+  ingredientRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f6f1',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     gap: 8,
   },
-  decisionButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#eef8f1',
-    borderWidth: 1,
-    borderColor: '#d6eadc',
+  ingredientIconWrap: {
+    width: 24,
+    height: 24,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  decisionButtonActive: {
+  ingredientText: {
+    fontSize: 13,
+    color: '#3d3830',
+    fontWeight: '600',
+    lineHeight: 18,
+    flex: 1,
+  },
+  prepRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  prepNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#e8e4de',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    marginTop: 1,
+  },
+  prepNumberActive: {
+    backgroundColor: '#1aa44f',
+  },
+  prepNumberText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  prepTextWrap: {
+    flex: 1,
+    paddingVertical: 4,
+  },
+  prepText: {
+    fontSize: 13,
+    color: '#4e4840',
+    fontWeight: '500',
+    lineHeight: 20,
+  },
+  macroInfo: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  macroInfoChip: {
+    flex: 1,
+    backgroundColor: '#f8f6f1',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ece8e2',
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  macroInfoLabel: {
+    fontSize: 10,
+    color: '#9a9083',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  macroInfoValue: {
+    fontSize: 15,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+
+  // ── Detail Hero card ─────────────────
+  detailHero: {
+    flexDirection: 'row',
+    gap: 14,
+    backgroundColor: '#f8f6f1',
+    borderRadius: 18,
+    padding: 14,
+    alignItems: 'center',
+  },
+  detailHeroImage: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#e8e2d8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    shadowColor: '#120f08',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  detailHeroEmoji: {
+    fontSize: 36,
+  },
+  detailHeroBody: {
+    flex: 1,
+    gap: 4,
+  },
+  detailHeroTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  detailHeroTagDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#1aa44f',
+  },
+  detailHeroTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1aa44f',
+    letterSpacing: 0.8,
+  },
+  detailHeroTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f1115',
+    lineHeight: 20,
+  },
+  detailHeroMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  detailHeroMetaText: {
+    fontSize: 12,
+    color: '#8e8579',
+    fontWeight: '600',
+  },
+  detailHeroMetaDivider: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: '#ccc8c0',
+    marginHorizontal: 2,
+  },
+
+  // ── Dual Action Buttons ──────────────
+  dualBtns: {
+    flexDirection: 'row',
+    gap: 7,
+    marginTop: 4,
+    flexShrink: 0,
+  },
+  dualBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+  },
+  dualBtnCheck: {
+    backgroundColor: '#f0fdf6',
+    borderColor: '#a8ddbf',
+  },
+  dualBtnCheckActive: {
     backgroundColor: '#1aa44f',
     borderColor: '#1aa44f',
   },
-  decisionButtonSkip: {
-    backgroundColor: '#fef0ef',
-    borderColor: '#ffd8d3',
+  dualBtnSkip: {
+    backgroundColor: '#fff5f5',
+    borderColor: '#ffc5c5',
   },
-  decisionEmoji: {
-    fontSize: 18,
-    color: '#11141b',
-    fontWeight: '900',
+  dualBtnSkipActive: {
+    backgroundColor: '#ef4444',
+    borderColor: '#ef4444',
   },
-  detailToggle: {
-    marginTop: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#efe6da',
-  },
-  detailToggleText: {
-    fontSize: 12,
-    color: '#9a9083',
-    fontWeight: '700',
-  },
-  mealDetailBox: {
-    marginTop: 12,
-    borderRadius: 16,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#efe6da',
-    padding: 14,
-    gap: 6,
-  },
-  mealDetailTitle: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#11141b',
-    fontWeight: '800',
-  },
-  mealDetailText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#6b6459',
-    fontWeight: '500',
-  },
-  mealDetailStep: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#6b6459',
-    fontWeight: '500',
-  },
+
+  // ── Exercise Cards ───────────────────
   exerciseList: {
-    gap: 12,
+    gap: 10,
   },
   exerciseCard: {
+    backgroundColor: '#ffffff',
     borderRadius: 20,
-    backgroundColor: '#fcfaf6',
-    borderWidth: 1,
-    borderColor: '#f0e8dd',
+    borderWidth: 1.5,
+    borderColor: '#efebe4',
     padding: 14,
+    shadowColor: '#120f08',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  exerciseCardDone: {
+    borderColor: '#b9e8cb',
+    backgroundColor: '#f5fdf8',
   },
   exerciseHeader: {
     flexDirection: 'row',
-    gap: 12,
     alignItems: 'center',
+    gap: 12,
   },
-  exerciseEmojiWrap: {
-    width: 50,
-    height: 50,
-    borderRadius: 16,
-    backgroundColor: '#eef6ff',
+  exerciseAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#eef3ff',
+    borderWidth: 1.5,
+    borderColor: '#d5e3ff',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
+  },
+  exerciseAvatarDone: {
+    backgroundColor: '#f0fdf6',
+    borderColor: '#a8ddbf',
   },
   exerciseEmoji: {
-    fontSize: 24,
+    fontSize: 26,
   },
-  exerciseTextWrap: {
+  exerciseInfo: {
     flex: 1,
+    minWidth: 0,
+    gap: 4,
   },
   exerciseTitle: {
-    fontSize: 14,
-    color: '#11141b',
+    fontSize: 15,
     fontWeight: '800',
+    color: '#0f1115',
   },
-  exerciseSubtext: {
-    marginTop: 6,
-    fontSize: 12,
-    color: '#7f7669',
+  exerciseBadges: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  exerciseBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#f5f3f0',
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  exerciseBadgeText: {
+    fontSize: 10,
+    color: '#8e8579',
     fontWeight: '600',
   },
-  exerciseNote: {
-    marginTop: 12,
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#6b6459',
+  exerciseNotes: {
+    fontSize: 11,
+    color: '#9a9083',
     fontWeight: '500',
+    lineHeight: 15,
+    marginTop: 2,
+  },
+
+  // ── Empty state ──────────────────────
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    gap: 8,
+  },
+  emptyEmoji: {
+    fontSize: 44,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f1115',
+  },
+  emptySubtext: {
+    fontSize: 13,
+    color: '#9a9083',
+    fontWeight: '500',
+    textAlign: 'center',
+    lineHeight: 18,
+    maxWidth: 280,
   },
 });

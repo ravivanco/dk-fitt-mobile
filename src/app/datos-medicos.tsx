@@ -13,12 +13,26 @@ import { authStore } from '@/store/auth.store';
 import { apiClient } from '@/services/api.client';
 
 // Componente Anillo Circular para Porcentajes
-const PercentageRing = ({ percentage, color, label, unit }: { percentage: number; color: string; label: string; unit: string }) => {
+const PercentageRing = ({
+  percentage,
+  color,
+  label,
+  unit,
+  noData = false,
+}: {
+  percentage: number;
+  color: string;
+  label: string;
+  unit: string;
+  noData?: boolean;
+}) => {
   const size = 140;
   const strokeWidth = 10;
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;
-  const strokeDashoffset = circumference - (percentage / 100) * circumference;
+  const strokeDashoffset = noData
+    ? circumference
+    : circumference - (percentage / 100) * circumference;
 
   return (
     <>
@@ -38,7 +52,7 @@ const PercentageRing = ({ percentage, color, label, unit }: { percentage: number
             cx={size / 2}
             cy={size / 2}
             r={radius}
-            stroke={color}
+            stroke={noData ? '#e0e7ff' : color}
             strokeWidth={strokeWidth}
             fill="none"
             strokeDasharray={circumference}
@@ -54,9 +68,9 @@ const PercentageRing = ({ percentage, color, label, unit }: { percentage: number
             dy="0.3em"
             fontSize="20"
             fontWeight="900"
-            fill={color}
+            fill={noData ? '#c8c3bb' : color}
           >
-            {percentage.toFixed(1)}%
+            {noData ? '–' : `${percentage.toFixed(1)}%`}
           </SvgText>
         </Svg>
       </View>
@@ -177,19 +191,45 @@ export default function DatosMedicosScreen() {
     const loadUser = async () => {
       try {
         const userData = await authStore.getUser();
-        if (mounted) setUser(userData);
 
+        // Obtener datos frescos del perfil desde la API (incluye onboarding)
+        let mergedUser = userData;
+        try {
+          const profileRes = await apiClient.get('/patient-profile/me');
+          const profileData = profileRes.data?.data ?? profileRes.data;
+          if (profileData && mounted) {
+            // La API puede devolver el onboarding anidado o flat.
+            // Construimos el objeto onboarding que el componente espera.
+            const apiOnboarding = profileData.onboarding ?? {
+              nivel_actividad_fisica: profileData.nivel_actividad_fisica,
+              objetivo:               profileData.objetivo,
+              alergias_intolerancias: profileData.alergias_intolerancias,
+              restricciones_alimenticias: profileData.restricciones_alimenticias,
+              condiciones:            profileData.condiciones ?? [],
+              alimentos_preferidos:   profileData.alimentos_preferidos ?? [],
+              deportes:               profileData.deportes ?? [],
+            };
+            mergedUser = { ...userData, ...profileData, onboarding: apiOnboarding };
+          }
+        } catch (profileErr) {
+          console.warn('[datos-medicos] No se pudo cargar el perfil del paciente:', profileErr);
+          // Seguimos con los datos del store
+        }
+
+        if (mounted) setUser(mergedUser);
+
+        // Obtener evaluación clínica
         try {
           const evalRes = await apiClient.get('/clinical-evaluations/me/history');
           if (mounted && evalRes.data?.data && Array.isArray(evalRes.data.data) && evalRes.data.data.length > 0) {
             setUserEval(evalRes.data.data[0]);
-          } else if (mounted && userData?.evaluacion_clinica) {
-            setUserEval(userData.evaluacion_clinica);
+          } else if (mounted && mergedUser?.evaluacion_clinica) {
+            setUserEval(mergedUser.evaluacion_clinica);
           }
         } catch (error) {
-          console.error("Error fetching clinical evaluation history:", error);
-          if (mounted && userData?.evaluacion_clinica) {
-            setUserEval(userData.evaluacion_clinica);
+          console.error('Error fetching clinical evaluation history:', error);
+          if (mounted && mergedUser?.evaluacion_clinica) {
+            setUserEval(mergedUser.evaluacion_clinica);
           }
         }
       } catch (error) {
@@ -233,6 +273,9 @@ export default function DatosMedicosScreen() {
     );
   }
 
+  // Sin evaluación clínica = paciente nuevo, la nutricionista no ha ingresado datos
+  const hasEval = userEval !== null;
+
   const onboarding = user?.onboarding || {};
   const nivelActividad = onboarding.nivel_actividad_fisica || '–';
   const objetivo = onboarding.objetivo || '–';
@@ -242,31 +285,48 @@ export default function DatosMedicosScreen() {
   const alimentos = onboarding.alimentos_preferidos || [];
   const deportes = onboarding.deportes || [];
 
-  const peso = userEval?.peso_kg ? parseFloat(userEval.peso_kg) : (user?.peso || 75);
-  const altura = userEval?.altura_cm ? (parseFloat(userEval.altura_cm) / 100) : (user?.altura || 1.75);
-  const alturaVisual = userEval?.altura_cm ? parseFloat(userEval.altura_cm) / 100 : altura;
-  const porcentajeGrasa = userEval?.porcentaje_grasa ? parseFloat(userEval.porcentaje_grasa) : (user?.porcentaje_grasa || 20);
-  const porcentajeAgua = userEval?.agua_corporal_pct ? parseFloat(userEval.agua_corporal_pct) : (user?.agua || 60);
-  
-  const masaMuscular = userEval?.masa_muscular_kg ? parseFloat(userEval.masa_muscular_kg) : (user?.masa_muscular || 30);
-  const grasaVisceral = userEval?.grasa_visceral ? parseFloat(userEval.grasa_visceral) : (user?.grasa_visceral || 5);
-  const masaOsea = userEval?.masa_osea_kg ? parseFloat(userEval.masa_osea_kg) : (user?.masa_osea || 3.2);
-  const metabolismoBasal = userEval?.tmb_kcal ? Math.round(parseFloat(userEval.tmb_kcal)) : (user?.metabolismo_basal || 1600);
-  const imc = userEval?.imc || calcularIMC(peso, altura);
+  // Solo usar valores reales de la evaluación clínica — sin fallbacks hardcodeados
+  const peso = hasEval && userEval?.peso_kg ? parseFloat(userEval.peso_kg) : 0;
+  const altura = hasEval && userEval?.altura_cm ? (parseFloat(userEval.altura_cm) / 100) : 0;
+  const alturaVisual = altura;
+  const porcentajeGrasa = hasEval && userEval?.porcentaje_grasa ? parseFloat(userEval.porcentaje_grasa) : 0;
+  const porcentajeAgua = hasEval && userEval?.agua_corporal_pct ? parseFloat(userEval.agua_corporal_pct) : 0;
+
+  const masaMuscular = hasEval && userEval?.masa_muscular_kg ? parseFloat(userEval.masa_muscular_kg) : 0;
+  const grasaVisceral = hasEval && userEval?.grasa_visceral ? parseFloat(userEval.grasa_visceral) : 0;
+  const masaOsea = hasEval && userEval?.masa_osea_kg ? parseFloat(userEval.masa_osea_kg) : 0;
+  const metabolismoBasal = hasEval && userEval?.tmb_kcal ? Math.round(parseFloat(userEval.tmb_kcal)) : 0;
+  const imc = hasEval ? (userEval?.imc || calcularIMC(peso, altura)) : null;
+
   const muscleMin = 20;
   const muscleMax = 50;
-  const muscleProgress = Math.min(Math.max(((masaMuscular - muscleMin) / (muscleMax - muscleMin)) * 100, 0), 100);
-  const muscleStatus = masaMuscular >= 28 ? 'Bueno' : masaMuscular >= 24 ? 'Moderado' : 'Bajo';
-  const muscleStatusColor = masaMuscular >= 28 ? '#10b981' : masaMuscular >= 24 ? '#f59e0b' : '#ef4444';
+  const muscleProgress = hasEval
+    ? Math.min(Math.max(((masaMuscular - muscleMin) / (muscleMax - muscleMin)) * 100, 0), 100)
+    : 0;
+  const muscleStatus = hasEval
+    ? (masaMuscular >= 28 ? 'Bueno' : masaMuscular >= 24 ? 'Moderado' : 'Bajo')
+    : 'Sin datos';
+  const muscleStatusColor = hasEval
+    ? (masaMuscular >= 28 ? '#10b981' : masaMuscular >= 24 ? '#f59e0b' : '#ef4444')
+    : '#c8c3bb';
   const visceralFatMax = 20;
-  const visceralFatProgress = Math.min((grasaVisceral / visceralFatMax) * 100, 100);
-  const visceralFatStatus = grasaVisceral <= 9 ? 'Buen progreso' : grasaVisceral <= 14 ? 'Moderado' : 'Elevado';
-  const visceralFatStatusColor = grasaVisceral <= 9 ? '#22c55e' : grasaVisceral <= 14 ? '#f59e0b' : '#ef4444';
+  const visceralFatProgress = hasEval ? Math.min((grasaVisceral / visceralFatMax) * 100, 100) : 0;
+  const visceralFatStatus = hasEval
+    ? (grasaVisceral <= 9 ? 'Buen progreso' : grasaVisceral <= 14 ? 'Moderado' : 'Elevado')
+    : 'Sin datos';
+  const visceralFatStatusColor = hasEval
+    ? (grasaVisceral <= 9 ? '#22c55e' : grasaVisceral <= 14 ? '#f59e0b' : '#ef4444')
+    : '#c8c3bb';
   const boneMassMax = 5;
-  const boneMassProgress = Math.min((masaOsea / boneMassMax) * 100, 100);
-  const boneMassStatus = masaOsea >= 3 ? 'Huesos fuertes' : masaOsea >= 2.3 ? 'Óptimo' : 'Bajo';
-  const boneMassStatusColor = masaOsea >= 3 ? '#22c55e' : masaOsea >= 2.3 ? '#7c5a36' : '#ef4444';
+  const boneMassProgress = hasEval ? Math.min((masaOsea / boneMassMax) * 100, 100) : 0;
+  const boneMassStatus = hasEval
+    ? (masaOsea >= 3 ? 'Huesos fuertes' : masaOsea >= 2.3 ? 'Óptimo' : 'Bajo')
+    : 'Sin datos';
+  const boneMassStatusColor = hasEval
+    ? (masaOsea >= 3 ? '#22c55e' : masaOsea >= 2.3 ? '#7c5a36' : '#ef4444')
+    : '#c8c3bb';
   const boneMassMarkerLeft = `${Math.min(Math.max(boneMassProgress - 2, 0), 96)}%`;
+
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -331,7 +391,16 @@ export default function DatosMedicosScreen() {
               </View>
               <View style={styles.healthContent}>
                 <Text style={styles.healthLabel}>DEPORTES</Text>
-                <Text style={styles.healthValue}>{deportes.join(', ')}</Text>
+                <Text style={styles.healthValue}>
+                  {deportes
+                    .map((d: any) => {
+                      // La API puede devolver objetos {deporte:'natacion'} o strings directos
+                      const raw = typeof d === 'string' ? d : (d?.deporte ?? d?.nombre ?? d?.nombre_deporte ?? '');
+                      return raw.charAt(0).toUpperCase() + raw.slice(1);
+                    })
+                    .filter(Boolean)
+                    .join(', ')}
+                </Text>
               </View>
             </View>
           )}
@@ -416,21 +485,35 @@ export default function DatosMedicosScreen() {
                 <Text style={styles.bioIconText}>📏</Text>
               </View>
               <Text style={styles.bioLabel}>ALTURA</Text>
-              <Text style={styles.bioValueLarge}>{alturaVisual.toFixed(2)}m</Text>
+              <Text style={[styles.bioValueLarge, !hasEval && { color: '#c8c3bb' }]}>
+                {hasEval ? `${alturaVisual.toFixed(2)}m` : '–'}
+              </Text>
             </View>
             <View style={styles.bioDataCard}>
               <View style={styles.bioIconSmall}>
                 <Text style={styles.bioIconText}>⚖️</Text>
               </View>
               <Text style={styles.bioLabel}>PESO</Text>
-              <Text style={styles.bioValueLarge}>{peso.toFixed(1)}kg</Text>
+              <Text style={[styles.bioValueLarge, !hasEval && { color: '#c8c3bb' }]}>
+                {hasEval ? `${peso.toFixed(1)}kg` : '–'}
+              </Text>
             </View>
           </View>
 
           {/* IMC Gauge */}
           <View style={styles.imcSectionContainer}>
             <View style={styles.imcGaugeWrapper}>
-              <IMCGauge height={altura} weight={peso} gender="Male" age={0} />
+              {hasEval ? (
+                <IMCGauge height={altura} weight={peso} gender="Male" age={0} />
+              ) : (
+                <View style={styles.imcPendingCard}>
+                  <MaterialCommunityIcons name="lock-outline" size={30} color="#c8c3bb" />
+                  <Text style={styles.imcPendingTitle}>IMC Pendiente</Text>
+                  <Text style={styles.imcPendingText}>
+                    Tu nutricionista registrará estos datos en tu primera consulta
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
 
@@ -438,23 +521,26 @@ export default function DatosMedicosScreen() {
           <View style={styles.metricsRingsContainer}>
             <View style={styles.ringCardCircular}>
               <Text style={styles.ringTitle}>Grasa Corporal</Text>
-              <PercentageRing 
-                percentage={porcentajeGrasa} 
+              <PercentageRing
+                percentage={porcentajeGrasa}
                 color="#ef4444"
                 label=""
                 unit=""
+                noData={!hasEval}
               />
             </View>
             <View style={styles.ringCardCircular}>
               <Text style={styles.ringTitle}>Agua Corporal</Text>
-              <PercentageRing 
-                percentage={porcentajeAgua} 
+              <PercentageRing
+                percentage={porcentajeAgua}
                 color="#0ea5e9"
                 label=""
                 unit=""
+                noData={!hasEval}
               />
             </View>
           </View>
+
 
           {/* Datos Adicionales con Barras Progresivas */}
           {/* Primera Fila: Masa Muscular (ancho completo) */}
@@ -470,8 +556,10 @@ export default function DatosMedicosScreen() {
                 </View>
               </View>
               <View style={styles.muscleCardValueInline}>
-                <Text style={styles.muscleCardValue}>{masaMuscular}</Text>
-                <Text style={styles.muscleCardUnit}>kg</Text>
+                <Text style={[styles.muscleCardValue, !hasEval && { color: '#c8c3bb' }]}>
+                  {hasEval ? masaMuscular : '–'}
+                </Text>
+                {hasEval && <Text style={styles.muscleCardUnit}>kg</Text>}
               </View>
             </View>
 
@@ -524,7 +612,9 @@ export default function DatosMedicosScreen() {
                   <Text style={styles.visceralFatSubtitle}>Grasa alrededor de órganos</Text>
                 </View>
               </View>
-              <Text style={styles.visceralFatValueLarge}>{grasaVisceral}</Text>
+              <Text style={[styles.visceralFatValueLarge, !hasEval && { color: '#c8c3bb' }]}>
+                {hasEval ? grasaVisceral : '–'}
+              </Text>
             </View>
 
             <View style={styles.visceralFatRangeContainer}>
@@ -567,8 +657,10 @@ export default function DatosMedicosScreen() {
                 </View>
               </View>
               <View style={styles.boneMassValueInline}>
-                <Text style={styles.boneMassValue}>{masaOsea.toFixed(1)}</Text>
-                <Text style={styles.boneMassUnit}>kg</Text>
+                <Text style={[styles.boneMassValue, !hasEval && { color: '#c8c3bb' }]}>
+                  {hasEval ? masaOsea.toFixed(1) : '–'}
+                </Text>
+                {hasEval && <Text style={styles.boneMassUnit}>kg</Text>}
               </View>
             </View>
 
@@ -613,9 +705,12 @@ export default function DatosMedicosScreen() {
               </View>
             </View>
             <View style={styles.metabolismValueWrap}>
-              <Text style={styles.metabolismValue}>{metabolismoBasal}</Text>
-              <Text style={styles.metabolismUnit}>kcal</Text>
+              <Text style={[styles.metabolismValue, !hasEval && { color: '#c8c3bb' }]}>
+                {hasEval ? metabolismoBasal : '–'}
+              </Text>
+              {hasEval && <Text style={styles.metabolismUnit}>kcal</Text>}
             </View>
+
           </View>
 
           {/* Nota sobre actualización */}
@@ -681,6 +776,31 @@ const styles = StyleSheet.create({
   // IMC Section
   imcSectionContainer: { marginBottom: 24 },
   imcGaugeWrapper: { alignItems: 'center' },
+  imcPendingCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 20,
+    backgroundColor: '#f7f3ee',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e7d9c8',
+    gap: 10,
+    width: '100%',
+  },
+  imcPendingTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#c8c3bb',
+    marginTop: 4,
+  },
+  imcPendingText: {
+    fontSize: 12,
+    color: '#c8c3bb',
+    textAlign: 'center',
+    fontWeight: '500',
+    lineHeight: 18,
+  },
   
   // Rings Container
   metricsRingsContainer: { flexDirection: 'row', gap: 16, marginBottom: 24, backgroundColor: '#f7f3ee', padding: 16, borderRadius: 18, borderWidth: 1, borderColor: '#e7d9c8', shadowColor: '#b9a48a', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6, elevation: 2 },
