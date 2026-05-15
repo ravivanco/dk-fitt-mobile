@@ -20,6 +20,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
 import { apiClient } from '@/services/api.client';
+import { intakeImageService } from '@/services/intake-image.service';
 import { authStore } from '@/store/auth.store';
 import {
   CalorieDashboard,
@@ -112,6 +113,7 @@ export default function ControlCaloricoScreen() {
   const [estimating, setEstimating] = useState(false);
   const [estimate, setEstimate] = useState<FoodEstimate | null>(null);
   const [mealDescription, setMealDescription] = useState('');
+  const [confirmingMeal, setConfirmingMeal] = useState(false);
 
   const loadDashboardState = React.useCallback(async () => {
     let mounted = true;
@@ -250,12 +252,20 @@ export default function ControlCaloricoScreen() {
     if (!estimate) return;
 
     try {
+      setConfirmingMeal(true);
+      await intakeImageService.uploadIntakeImage({
+        imageUri: estimate.imageUri,
+        descripcion_alimento: mealDescription.trim().length > 0 ? mealDescription.trim() : undefined,
+      });
+
       const updated = await confirmEstimatedMeal(estimate);
       setDashboard(updated);
       setEstimate(null);
       Alert.alert('Comida registrada', 'Las calorias y macros ya impactan tu resumen del dia.');
     } catch {
       Alert.alert('Error', 'No pudimos registrar esta comida.');
+    } finally {
+      setConfirmingMeal(false);
     }
   };
 
@@ -488,10 +498,17 @@ export default function ControlCaloricoScreen() {
                         <Text style={styles.secondaryButtonText}>No</Text>
                       </View>
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.primaryButton} onPress={() => void handleConfirmEstimate()}>
+                    <TouchableOpacity
+                      style={[styles.primaryButton, confirmingMeal && { opacity: 0.75 }]}
+                      disabled={confirmingMeal}
+                      onPress={() => void handleConfirmEstimate()}>
                       <View style={styles.decisionContent}>
-                        <Text style={styles.decisionEmoji}>✓</Text>
-                        <Text style={styles.primaryButtonText}>Si</Text>
+                        {confirmingMeal ? (
+                          <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                          <Text style={styles.decisionEmoji}>✓</Text>
+                        )}
+                        <Text style={styles.primaryButtonText}>{confirmingMeal ? 'Guardando...' : 'Si'}</Text>
                       </View>
                     </TouchableOpacity>
                   </View>

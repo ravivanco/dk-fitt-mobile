@@ -1,7 +1,8 @@
 import { apiClient } from './api.client';
+import * as FileSystem from 'expo-file-system/legacy';
 import { ApiSuccessResponse } from '@/types/auth.types';
 import {
-  AnalyzeImageUrlRequest,
+  AnalyzeImageRequest,
   AnalyzeImageUrlResponse,
   IntakeEstimation,
   UploadIntakeImageResponse,
@@ -59,13 +60,33 @@ function normalizeEstimation(input: unknown): IntakeEstimation {
 }
 
 export const intakeImageService = {
-  async analyzeImageUrl(body: AnalyzeImageUrlRequest): Promise<AnalyzeImageUrlResponse> {
+  async analyzeImageUrl(params: { imagen_url: string; descripcion_alimento?: string }): Promise<AnalyzeImageUrlResponse> {
+    return this.analyzeImage({
+      imagen_url: params.imagen_url,
+      descripcion_alimento: params.descripcion_alimento,
+    });
+  },
+
+  async analyzeLocalImage(params: { imageUri: string; descripcion_alimento?: string }): Promise<AnalyzeImageUrlResponse> {
+    const base64 = await FileSystem.readAsStringAsync(params.imageUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const dataUri = `data:${guessMimeType(params.imageUri)};base64,${base64}`;
+
+    return this.analyzeImage({
+      image_base64: base64,
+      imagen_base64: dataUri,
+      descripcion_alimento: params.descripcion_alimento,
+    });
+  },
+
+  async analyzeImage(body: AnalyzeImageRequest): Promise<AnalyzeImageUrlResponse> {
     const response = await apiClient.post('/image-calorie-analyzer/analyze', body, { timeout: 30_000 });
     const data = unwrapApi<AnalyzeImageUrlResponse>(response.data);
     return normalizeEstimation(data) as AnalyzeImageUrlResponse;
   },
 
-  async analyzeAdditionalIntake(body: AnalyzeImageUrlRequest): Promise<AnalyzeImageUrlResponse> {
+  async analyzeAdditionalIntake(body: AnalyzeImageRequest): Promise<AnalyzeImageUrlResponse> {
     const response = await apiClient.post('/additional-intake/analyze', body, { timeout: 30_000 });
     const data = unwrapApi<AnalyzeImageUrlResponse>(response.data);
     return normalizeEstimation(data) as AnalyzeImageUrlResponse;

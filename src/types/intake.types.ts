@@ -39,8 +39,10 @@ export type UploadIntakeImageResponse = {
   [key: string]: unknown;
 };
 
-export type AnalyzeImageUrlRequest = {
-  imagen_url: string;
+export type AnalyzeImageRequest = {
+  imagen_url?: string;
+  image_base64?: string;
+  imagen_base64?: string;
   descripcion_alimento?: string;
 };
 

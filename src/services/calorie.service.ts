@@ -332,9 +332,9 @@ export async function estimateMealFromPhoto(
     const looksLikeRemoteUrl = /^https?:\/\//i.test(imageUri);
     const response = looksLikeRemoteUrl
       ? await intakeImageService.analyzeImageUrl({ imagen_url: imageUri, descripcion_alimento })
-      : await intakeImageService.uploadIntakeImage({ imageUri, descripcion_alimento });
+      : await intakeImageService.analyzeLocalImage({ imageUri, descripcion_alimento });
 
-    const estimation = looksLikeRemoteUrl ? (response as any) : ((response as any).estimacion ?? (response as any).estimation ?? response);
+    const estimation = response as any;
     const items = Array.isArray(estimation?.items) ? estimation.items : [];
 
     const firstName = typeof items?.[0]?.name === 'string' ? items[0].name : 'Comida detectada';
