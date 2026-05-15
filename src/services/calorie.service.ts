@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { authStore } from '@/store/auth.store';
+import { intakeImageService } from '@/services/intake-image.service';
 
 export type MacroKey = 'protein' | 'carbs' | 'fat';
 
@@ -324,16 +325,81 @@ export async function saveDailyWeight(value: number): Promise<CalorieDashboard> 
 }
 
 export async function estimateMealFromPhoto(imageUri: string): Promise<FoodEstimate> {
-  const seed = imageUri.length % ESTIMATE_LIBRARY.length;
-  const selected = ESTIMATE_LIBRARY[seed];
+  try {
+    const looksLikeRemoteUrl = /^https?:\/\//i.test(imageUri);
+    const response = looksLikeRemoteUrl
+      ? await intakeImageService.analyzeImageUrl({ imagen_url: imageUri })
+      : await intakeImageService.uploadIntakeImage({ imageUri });
 
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+    const estimation = looksLikeRemoteUrl ? (response as any) : ((response as any).estimacion ?? (response as any).estimation ?? response);
+    const items = Array.isArray(estimation?.items) ? estimation.items : [];
 
-  return {
-    ...selected,
-    id: `${Date.now()}-${seed}`,
-    imageUri,
-  };
+    const firstName = typeof items?.[0]?.name === 'string' ? items[0].name : 'Comida detectada';
+
+    const sumItems = items.reduce((acc: number, item: any) => {
+      const value = typeof item?.calories === 'number' ? item.calories : 0;
+      return acc + value;
+    }, 0);
+
+    const rawTotal =
+      typeof estimation?.totalCalories === 'number'
+        ? estimation.totalCalories
+        : typeof estimation?.total_calories === 'number'
+          ? estimation.total_calories
+          : typeof estimation?.calorias_estimadas === 'number'
+            ? estimation.calorias_estimadas
+            : sumItems;
+
+    const calories = Number.isFinite(rawTotal) ? Math.max(0, Math.round(rawTotal)) : 0;
+    const alertTone: FoodEstimate['alertTone'] = calories >= 800 ? 'high' : 'medium';
+
+    return {
+      id:
+        typeof estimation?.jobId === 'string' && estimation.jobId.trim().length > 0
+          ? estimation.jobId
+          : `${Date.now()}`,
+      name:
+        typeof estimation?.texto_detectado === 'string' && estimation.texto_detectado.trim().length > 0
+          ? estimation.texto_detectado
+          : firstName,
+      calories,
+      imageUri,
+      alertTone,
+      alertTitle: alertTone === 'high' ? 'Carga calorica alta' : 'Comida energetica',
+      alertMessage: (() => {
+        const apiMessage = typeof estimation?.mensaje === 'string' ? estimation.mensaje : undefined;
+        if (apiMessage && apiMessage.trim().length > 0) return apiMessage;
+        return alertTone === 'high'
+          ? 'Si la registras, conviene compensarla con una sesion intensa o ajustar el resto del dia.'
+          : 'Puede entrar en tu plan si el resto del dia se mantiene ligero y con buena hidratacion.';
+      })(),
+      exerciseSuggestions:
+        alertTone === 'high'
+          ? ['HIIT 25 min', 'Spinning 35 min', 'Circuito funcional 30 min']
+          : ['Caminata rapida 40 min', 'Bicicleta 30 min', 'Pierna y core 25 min'],
+      macroImpact: {
+        protein: 0,
+        carbs: 0,
+        fat: 0,
+      },
+    };
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[estimateMealFromPhoto] Fallo backend, usando fallback local:', error);
+
+      const seed = imageUri.length % ESTIMATE_LIBRARY.length;
+      const selected = ESTIMATE_LIBRARY[seed];
+      await new Promise((resolve) => setTimeout(resolve, 700));
+
+      return {
+        ...selected,
+        id: `${Date.now()}-${seed}`,
+        imageUri,
+      };
+    }
+
+    throw error;
+  }
 }
 
 export async function confirmEstimatedMeal(estimate: FoodEstimate): Promise<CalorieDashboard> {

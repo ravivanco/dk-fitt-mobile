@@ -228,8 +228,15 @@ export default function ControlCaloricoScreen() {
       setEstimating(true);
       const nextEstimate = await estimateMealFromPhoto(result.assets[0].uri);
       setEstimate(nextEstimate);
-    } catch {
-      Alert.alert('Error', 'No pudimos analizar la foto en este momento.');
+    } catch (error: any) {
+      const status = typeof error?.status === 'number' ? error.status : undefined;
+      if (status === 401) {
+        Alert.alert('Sesión requerida', 'Inicia sesión para poder analizar tu comida.');
+      } else if (status === 403) {
+        Alert.alert('Acceso restringido', 'Tu cuenta no tiene permiso para analizar imágenes.');
+      } else {
+        Alert.alert('Error', error?.message ?? 'No pudimos analizar la foto en este momento.');
+      }
     } finally {
       setEstimating(false);
     }
@@ -1282,4 +1289,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 });
-

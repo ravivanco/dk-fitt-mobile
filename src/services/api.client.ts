@@ -9,9 +9,15 @@ import { ApiErrorResponse } from '../types/auth.types';
  *
  * Cambia esta URL según tu entorno:
  */
-const API_BASE_URL = 'https://dk-fitt-api.onrender.com/api';
+const DEFAULT_API_BASE_URL = 'https://dk-fitt-api.onrender.com/api';
+
+/**
+ * Puedes sobreescribir el backend desde `.env` / variables de Expo:
+ * `EXPO_PUBLIC_API_BASE_URL=https://tu-backend/api`
+ */
+const API_BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL).replace(/\/$/, '');
 // Para desarrollo local descomenta esta línea y comenta la de arriba:
-// const API_BASE_URL = 'http://192.168.X.X:3000/api';
+// EXPO_PUBLIC_API_BASE_URL='http://192.168.X.X:3000/api'
 // (reemplaza X.X con tu IP local — la que ves en ipconfig)
 
 /**

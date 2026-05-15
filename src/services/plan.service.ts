@@ -494,6 +494,10 @@ function getTodayDayKey(): DayKey {
       return 'thursday';
     case 5:
       return 'friday';
+    case 6:
+      return 'friday';
+    case 0:
+      return 'friday';
     default:
       return 'monday';
   }

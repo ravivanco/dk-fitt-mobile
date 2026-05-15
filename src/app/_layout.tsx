@@ -45,6 +45,12 @@ export default function RootLayout() {
 				<Stack.Screen name="control-calorico" />
 				<Stack.Screen name="menus" />
 				<Stack.Screen name="ejercicios" />
+				<Stack.Screen name="ejercicios/gimnasio" />
+				<Stack.Screen name="ejercicios/running" />
+				<Stack.Screen name="ejercicios/futbol" />
+				<Stack.Screen name="ejercicios/basquet" />
+				<Stack.Screen name="ejercicios/ciclismo" />
+				<Stack.Screen name="ejercicios/natacion" />
 				<Stack.Screen name="progreso" />
 				<Stack.Screen name="perfil" />
 				<Stack.Screen name="perfil-editar" />

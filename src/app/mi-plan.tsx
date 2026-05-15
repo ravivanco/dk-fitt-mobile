@@ -333,13 +333,21 @@ export default function MiPlanScreen() {
   const [loading, setLoading] = useState(true);
   const [expandedMealIds, setExpandedMealIds] = useState<string[]>([]);
   const [totalKcal, setTotalKcal] = useState<number>(0);
+  const hasInitializedDayRef = React.useRef(false);
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
     try {
       const [nextPlan, nextDashboard] = await Promise.all([loadWeeklyPlan(), loadCalorieDashboard()]);
       setWeeklyPlan(nextPlan);
-      setActiveDayKey(nextPlan.activeDayKey);
+      setActiveDayKey((prev) => {
+        if (hasInitializedDayRef.current && nextPlan.days.some((day) => day.key === prev)) {
+          return prev;
+        }
+
+        return nextPlan.activeDayKey;
+      });
+      hasInitializedDayRef.current = true;
       setTotalKcal(nextDashboard?.dailyTarget ?? nextPlan.days[0]?.targetCalories ?? 1800);
     } finally {
       setLoading(false);

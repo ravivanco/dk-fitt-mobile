@@ -4,6 +4,12 @@ Este README contiene:
 - La estructura actual del proyecto.
 - El codigo completo de los formularios del 1 al 7 (archivo de ruta + componente principal).
 
+## Backend API
+
+La app consume el backend usando Axios (`src/services/api.client.ts`). Por defecto apunta a Render, pero se puede sobreescribir con:
+
+- `EXPO_PUBLIC_API_BASE_URL` (ej: `https://dk-fitt-api.onrender.com/api` o `http://192.168.X.X:3000/api`)
+
 ## Estructura del proyecto
 
 ```text
