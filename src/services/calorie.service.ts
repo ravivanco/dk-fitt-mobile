@@ -329,15 +329,44 @@ export async function estimateMealFromPhoto(
   descripcion_alimento?: string,
 ): Promise<FoodEstimate> {
   try {
+    const cleanedDescription =
+      typeof descripcion_alimento === 'string' && descripcion_alimento.trim().length > 0
+        ? descripcion_alimento.trim()
+        : undefined;
+
     const looksLikeRemoteUrl = /^https?:\/\//i.test(imageUri);
     const response = looksLikeRemoteUrl
-      ? await intakeImageService.analyzeImageUrl({ imagen_url: imageUri, descripcion_alimento })
-      : await intakeImageService.analyzeLocalImage({ imageUri, descripcion_alimento });
+      ? await intakeImageService.analyzeImageUrl({ imagen_url: imageUri, descripcion_alimento: cleanedDescription })
+      : await intakeImageService.analyzeLocalImage({ imageUri, descripcion_alimento: cleanedDescription });
 
     const estimation = response as any;
     const items = Array.isArray(estimation?.items) ? estimation.items : [];
 
-    const firstName = typeof items?.[0]?.name === 'string' ? items[0].name : 'Comida detectada';
+    const labelFromTags = (() => {
+      const tags = estimation?.etiquetas_detectadas;
+      if (Array.isArray(tags) && tags.length > 0) {
+        const first = tags[0];
+        if (typeof first === 'string') return first;
+        if (first && typeof first === 'object' && typeof (first as any).description === 'string') {
+          return (first as any).description;
+        }
+        if (first && typeof first === 'object' && typeof (first as any).name === 'string') {
+          return (first as any).name;
+        }
+      }
+      const labels = estimation?.labels;
+      if (Array.isArray(labels) && labels.length > 0 && typeof labels[0]?.description === 'string') {
+        return labels[0].description;
+      }
+      return undefined;
+    })();
+
+    const firstName =
+      typeof items?.[0]?.name === 'string'
+        ? items[0].name
+        : typeof labelFromTags === 'string'
+          ? labelFromTags
+          : 'Comida detectada';
 
     const sumItems = items.reduce((acc: number, item: any) => {
       const value = typeof item?.calories === 'number' ? item.calories : 0;
@@ -361,10 +390,7 @@ export async function estimateMealFromPhoto(
         typeof estimation?.jobId === 'string' && estimation.jobId.trim().length > 0
           ? estimation.jobId
           : `${Date.now()}`,
-      name:
-        typeof estimation?.texto_detectado === 'string' && estimation.texto_detectado.trim().length > 0
-          ? estimation.texto_detectado
-          : firstName,
+      name: cleanedDescription ?? firstName,
       calories,
       imageUri,
       alertTone,
@@ -387,20 +413,6 @@ export async function estimateMealFromPhoto(
       },
     };
   } catch (error) {
-    if (__DEV__) {
-      console.warn('[estimateMealFromPhoto] Fallo backend, usando fallback local:', error);
-
-      const seed = imageUri.length % ESTIMATE_LIBRARY.length;
-      const selected = ESTIMATE_LIBRARY[seed];
-      await new Promise((resolve) => setTimeout(resolve, 700));
-
-      return {
-        ...selected,
-        id: `${Date.now()}-${seed}`,
-        imageUri,
-      };
-    }
-
     throw error;
   }
 }
