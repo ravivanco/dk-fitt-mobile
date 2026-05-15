@@ -324,12 +324,15 @@ export async function saveDailyWeight(value: number): Promise<CalorieDashboard> 
   return updated;
 }
 
-export async function estimateMealFromPhoto(imageUri: string): Promise<FoodEstimate> {
+export async function estimateMealFromPhoto(
+  imageUri: string,
+  descripcion_alimento?: string,
+): Promise<FoodEstimate> {
   try {
     const looksLikeRemoteUrl = /^https?:\/\//i.test(imageUri);
     const response = looksLikeRemoteUrl
-      ? await intakeImageService.analyzeImageUrl({ imagen_url: imageUri })
-      : await intakeImageService.uploadIntakeImage({ imageUri });
+      ? await intakeImageService.analyzeImageUrl({ imagen_url: imageUri, descripcion_alimento })
+      : await intakeImageService.uploadIntakeImage({ imageUri, descripcion_alimento });
 
     const estimation = looksLikeRemoteUrl ? (response as any) : ((response as any).estimacion ?? (response as any).estimation ?? response);
     const items = Array.isArray(estimation?.items) ? estimation.items : [];

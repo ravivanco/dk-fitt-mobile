@@ -111,6 +111,7 @@ export default function ControlCaloricoScreen() {
   const [savingWeight, setSavingWeight] = useState(false);
   const [estimating, setEstimating] = useState(false);
   const [estimate, setEstimate] = useState<FoodEstimate | null>(null);
+  const [mealDescription, setMealDescription] = useState('');
 
   const loadDashboardState = React.useCallback(async () => {
     let mounted = true;
@@ -226,7 +227,10 @@ export default function ControlCaloricoScreen() {
 
       setEstimate(null);
       setEstimating(true);
-      const nextEstimate = await estimateMealFromPhoto(result.assets[0].uri);
+      const nextEstimate = await estimateMealFromPhoto(
+        result.assets[0].uri,
+        mealDescription.trim().length > 0 ? mealDescription.trim() : undefined,
+      );
       setEstimate(nextEstimate);
     } catch (error: any) {
       const status = typeof error?.status === 'number' ? error.status : undefined;
@@ -406,6 +410,25 @@ export default function ControlCaloricoScreen() {
                 <Text style={styles.scanActionTitle}>Subir foto</Text>
                 <Text style={styles.scanActionText}>Usa una imagen guardada</Text>
               </TouchableOpacity>
+            </View>
+
+            <View style={styles.descriptionCard}>
+              <View style={styles.descriptionHeader}>
+                <MaterialCommunityIcons name="text-short" size={18} color="#8e8579" />
+                <Text style={styles.descriptionTitle}>Descripción (opcional)</Text>
+              </View>
+              <TextInput
+                value={mealDescription}
+                onChangeText={setMealDescription}
+                placeholder="Ej: hamburguesa, pizza, ensalada..."
+                placeholderTextColor="#b7b0a6"
+                style={styles.descriptionInput}
+                maxLength={80}
+                returnKeyType="done"
+              />
+              <Text style={styles.descriptionHint}>
+                Ayuda a la IA a estimar mejor cuando la foto no es clara.
+              </Text>
             </View>
 
             {estimating && (
@@ -857,6 +880,45 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: '#908779',
     fontWeight: '500',
+  },
+  descriptionCard: {
+    marginTop: 12,
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#efebe4',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  descriptionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  descriptionTitle: {
+    color: '#4f493e',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+  },
+  descriptionInput: {
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ece2d6',
+    backgroundColor: '#fbf8f3',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#11141b',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  descriptionHint: {
+    marginTop: 8,
+    color: '#9a9389',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
   },
   analysisCard: {
     marginTop: 14,
