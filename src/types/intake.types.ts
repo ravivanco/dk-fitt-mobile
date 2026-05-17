@@ -7,6 +7,20 @@ export type IntakeDetectedItem = {
   calories?: number;
 };
 
+export type IntakeDetectedFood = {
+  nombre: string;
+  cantidad_g?: number | null;
+  calorias?: number | null;
+  [key: string]: unknown;
+};
+
+export type IntakeMacros = {
+  proteinas_g?: number | null;
+  carbohidratos_g?: number | null;
+  grasas_g?: number | null;
+  [key: string]: unknown;
+};
+
 export type IntakeEstimation = {
   jobId?: string;
   items?: IntakeDetectedItem[];
@@ -19,6 +33,8 @@ export type IntakeEstimation = {
   confianza_pct?: number;
   porcion_estimada_g?: number | null;
   fuente_estimacion?: string;
+  alimentos_detectados?: IntakeDetectedFood[];
+  macros?: IntakeMacros;
   etiquetas_detectadas?: unknown[];
   texto_detectado?: string | null;
   mensaje?: string;
@@ -36,6 +52,7 @@ export type UploadIntakeImageResponse = {
   upload?: UploadResult;
   estimacion?: IntakeEstimation;
   estimation?: IntakeEstimation;
+  imagen_url?: string;
   [key: string]: unknown;
 };
 

@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { authStore } from '@/store/auth.store';
 import { intakeImageService } from '@/services/intake-image.service';
+import { IntakeEstimation } from '@/types/intake.types';
 
 export type MacroKey = 'protein' | 'carbs' | 'fat';
 
@@ -25,6 +26,8 @@ export type FoodEstimate = {
   name: string;
   calories: number;
   imageUri: string;
+  estimation?: IntakeEstimation;
+  requiresManualCalories?: boolean;
   alertTone: 'high' | 'medium';
   alertTitle: string;
   alertMessage: string;
@@ -124,6 +127,104 @@ const ESTIMATE_LIBRARY: Omit<FoodEstimate, 'id' | 'imageUri'>[] = [
     },
   },
 ];
+
+function buildFoodEstimateFromEstimation(params: {
+  estimation: any;
+  imageUri: string;
+  descripcion_alimento?: string;
+}): FoodEstimate {
+  const cleanedDescription =
+    typeof params.descripcion_alimento === 'string' && params.descripcion_alimento.trim().length > 0
+      ? params.descripcion_alimento.trim()
+      : undefined;
+
+  const estimation = params.estimation ?? {};
+  const items = Array.isArray(estimation?.items) ? estimation.items : [];
+
+  const labelFromTags = (() => {
+    const tags = estimation?.etiquetas_detectadas;
+    if (Array.isArray(tags) && tags.length > 0) {
+      const first = tags[0];
+      if (typeof first === 'string') return first;
+      if (first && typeof first === 'object' && typeof (first as any).description === 'string') {
+        return (first as any).description;
+      }
+      if (first && typeof first === 'object' && typeof (first as any).name === 'string') {
+        return (first as any).name;
+      }
+    }
+    const labels = estimation?.labels;
+    if (Array.isArray(labels) && labels.length > 0 && typeof labels[0]?.description === 'string') {
+      return labels[0].description;
+    }
+    return undefined;
+  })();
+
+  const firstName =
+    typeof items?.[0]?.name === 'string'
+      ? items[0].name
+      : Array.isArray(estimation?.alimentos_detectados) && typeof estimation.alimentos_detectados?.[0]?.nombre === 'string'
+        ? estimation.alimentos_detectados[0].nombre
+        : typeof labelFromTags === 'string'
+          ? labelFromTags
+          : 'Comida detectada';
+
+  const sumItems = items.reduce((acc: number, item: any) => {
+    const value = typeof item?.calories === 'number' ? item.calories : 0;
+    return acc + value;
+  }, 0);
+
+  const rawTotal =
+    typeof estimation?.totalCalories === 'number'
+      ? estimation.totalCalories
+      : typeof estimation?.total_calories === 'number'
+        ? estimation.total_calories
+        : typeof estimation?.calorias_estimadas === 'number'
+          ? estimation.calorias_estimadas
+          : typeof estimation?.calorias_estimadas === 'string'
+            ? Number(estimation.calorias_estimadas)
+            : sumItems;
+
+  const hasCalories = Number.isFinite(rawTotal);
+  const calories = hasCalories ? Math.max(0, Math.round(rawTotal)) : 0;
+  const alertTone: FoodEstimate['alertTone'] = calories >= 800 ? 'high' : 'medium';
+
+  const hasDirectEstimate =
+    estimation?.calorias_estimadas != null || estimation?.totalCalories != null || estimation?.total_calories != null;
+
+  return {
+    id:
+      typeof estimation?.jobId === 'string' && estimation.jobId.trim().length > 0
+        ? estimation.jobId
+        : `${Date.now()}`,
+    name: cleanedDescription ?? firstName,
+    calories,
+    imageUri: params.imageUri,
+    estimation: estimation as IntakeEstimation,
+    requiresManualCalories:
+      estimation?.fuente_estimacion === 'pendiente' ||
+      (!hasDirectEstimate && sumItems === 0) ||
+      !hasCalories,
+    alertTone,
+    alertTitle: alertTone === 'high' ? 'Carga calorica alta' : 'Comida energetica',
+    alertMessage: (() => {
+      const apiMessage = typeof estimation?.mensaje === 'string' ? estimation.mensaje : undefined;
+      if (apiMessage && apiMessage.trim().length > 0) return apiMessage;
+      return alertTone === 'high'
+        ? 'Si la registras, conviene compensarla con una sesion intensa o ajustar el resto del dia.'
+        : 'Puede entrar en tu plan si el resto del dia se mantiene ligero y con buena hidratacion.';
+    })(),
+    exerciseSuggestions:
+      alertTone === 'high'
+        ? ['HIIT 25 min', 'Spinning 35 min', 'Circuito funcional 30 min']
+        : ['Caminata rapida 40 min', 'Bicicleta 30 min', 'Pierna y core 25 min'],
+    macroImpact: {
+      protein: 0,
+      carbs: 0,
+      fat: 0,
+    },
+  };
+}
 
 function formatLocalDate(date = new Date()) {
   const year = date.getFullYear();
@@ -337,84 +438,78 @@ export async function estimateMealFromPhoto(
     const looksLikeRemoteUrl = /^https?:\/\//i.test(imageUri);
     const response = looksLikeRemoteUrl
       ? await intakeImageService.analyzeImageUrl({ imagen_url: imageUri, descripcion_alimento: cleanedDescription })
-      : await intakeImageService.analyzeLocalImage({ imageUri, descripcion_alimento: cleanedDescription });
+      : (() => {
+          return intakeImageService
+            .uploadIntakeImage({ imageUri, descripcion_alimento: cleanedDescription })
+            .then((upload) => {
+              // El servicio normaliza el campo como imagen_url; también aceptamos url como fallback
+              const url =
+                typeof upload?.imagen_url === 'string'
+                  ? upload.imagen_url
+                  : typeof (upload as any)?.url === 'string'
+                    ? (upload as any).url
+                    : undefined;
+              if (!url) {
+                throw new Error('No se pudo subir la imagen. Verifica tu conexión.');
+              }
+              return intakeImageService.analyzeImageUrl({ imagen_url: url, descripcion_alimento: cleanedDescription });
+            });
+        })();
 
     const estimation = response as any;
-    const items = Array.isArray(estimation?.items) ? estimation.items : [];
-
-    const labelFromTags = (() => {
-      const tags = estimation?.etiquetas_detectadas;
-      if (Array.isArray(tags) && tags.length > 0) {
-        const first = tags[0];
-        if (typeof first === 'string') return first;
-        if (first && typeof first === 'object' && typeof (first as any).description === 'string') {
-          return (first as any).description;
-        }
-        if (first && typeof first === 'object' && typeof (first as any).name === 'string') {
-          return (first as any).name;
-        }
-      }
-      const labels = estimation?.labels;
-      if (Array.isArray(labels) && labels.length > 0 && typeof labels[0]?.description === 'string') {
-        return labels[0].description;
-      }
-      return undefined;
-    })();
-
-    const firstName =
-      typeof items?.[0]?.name === 'string'
-        ? items[0].name
-        : typeof labelFromTags === 'string'
-          ? labelFromTags
-          : 'Comida detectada';
-
-    const sumItems = items.reduce((acc: number, item: any) => {
-      const value = typeof item?.calories === 'number' ? item.calories : 0;
-      return acc + value;
-    }, 0);
-
-    const rawTotal =
-      typeof estimation?.totalCalories === 'number'
-        ? estimation.totalCalories
-        : typeof estimation?.total_calories === 'number'
-          ? estimation.total_calories
-          : typeof estimation?.calorias_estimadas === 'number'
-            ? estimation.calorias_estimadas
-            : sumItems;
-
-    const calories = Number.isFinite(rawTotal) ? Math.max(0, Math.round(rawTotal)) : 0;
-    const alertTone: FoodEstimate['alertTone'] = calories >= 800 ? 'high' : 'medium';
-
-    return {
-      id:
-        typeof estimation?.jobId === 'string' && estimation.jobId.trim().length > 0
-          ? estimation.jobId
-          : `${Date.now()}`,
-      name: cleanedDescription ?? firstName,
-      calories,
+    if (__DEV__) {
+      console.log('[calorie][estimateMealFromPhoto][estimation]', {
+        fuente_estimacion: estimation?.fuente_estimacion,
+        calorias_estimadas: estimation?.calorias_estimadas,
+        totalCalories: estimation?.totalCalories,
+        total_calories: estimation?.total_calories,
+        confianza_pct: estimation?.confianza_pct,
+        hasItems: Array.isArray(estimation?.items) ? estimation.items.length : undefined,
+        hasFoods: Array.isArray(estimation?.alimentos_detectados) ? estimation.alimentos_detectados.length : undefined,
+      });
+    }
+    return buildFoodEstimateFromEstimation({
+      estimation,
       imageUri,
-      alertTone,
-      alertTitle: alertTone === 'high' ? 'Carga calorica alta' : 'Comida energetica',
-      alertMessage: (() => {
-        const apiMessage = typeof estimation?.mensaje === 'string' ? estimation.mensaje : undefined;
-        if (apiMessage && apiMessage.trim().length > 0) return apiMessage;
-        return alertTone === 'high'
-          ? 'Si la registras, conviene compensarla con una sesion intensa o ajustar el resto del dia.'
-          : 'Puede entrar en tu plan si el resto del dia se mantiene ligero y con buena hidratacion.';
-      })(),
-      exerciseSuggestions:
-        alertTone === 'high'
-          ? ['HIIT 25 min', 'Spinning 35 min', 'Circuito funcional 30 min']
-          : ['Caminata rapida 40 min', 'Bicicleta 30 min', 'Pierna y core 25 min'],
-      macroImpact: {
-        protein: 0,
-        carbs: 0,
-        fat: 0,
-      },
-    };
+      descripcion_alimento: cleanedDescription,
+    });
   } catch (error) {
     throw error;
   }
+}
+
+export async function estimateMealFromUploadedImage(params: {
+  uploadedImageUrl: string;
+  previewImageUri: string;
+  descripcion_alimento?: string;
+}): Promise<FoodEstimate> {
+  const cleanedDescription =
+    typeof params.descripcion_alimento === 'string' && params.descripcion_alimento.trim().length > 0
+      ? params.descripcion_alimento.trim()
+      : undefined;
+
+  const response = await intakeImageService.analyzeImageUrl({
+    imagen_url: params.uploadedImageUrl,
+    descripcion_alimento: cleanedDescription,
+  });
+
+  const estimation = response as any;
+  if (__DEV__) {
+    console.log('[calorie][estimateMealFromUploadedImage][estimation]', {
+      fuente_estimacion: estimation?.fuente_estimacion,
+      calorias_estimadas: estimation?.calorias_estimadas,
+      totalCalories: estimation?.totalCalories,
+      confianza_pct: estimation?.confianza_pct,
+      hasItems: Array.isArray(estimation?.items) ? estimation.items.length : undefined,
+      hasFoods: Array.isArray(estimation?.alimentos_detectados) ? estimation.alimentos_detectados.length : undefined,
+    });
+  }
+
+  return buildFoodEstimateFromEstimation({
+    estimation,
+    imageUri: params.previewImageUri,
+    descripcion_alimento: cleanedDescription,
+  });
 }
 
 export async function confirmEstimatedMeal(estimate: FoodEstimate): Promise<CalorieDashboard> {

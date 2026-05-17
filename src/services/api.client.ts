@@ -42,11 +42,18 @@ apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     if (__DEV__) {
       const url = config.url ?? '';
-      if (url.includes('/patient-profile') || url.includes('/foods')) {
+      if (
+        url.includes('/patient-profile') ||
+        url.includes('/foods') ||
+        url.includes('/image-calorie-analyzer') ||
+        url.includes('/upload/intake-image') ||
+        url.includes('/additional-intake')
+      ) {
         console.log('[api][request]', {
           method: config.method,
           url,
           hasAuth: Boolean(config.headers?.Authorization),
+          timeout: config.timeout,
           data: config.data,
           params: config.params,
         });
@@ -70,7 +77,13 @@ apiClient.interceptors.response.use(
   (response) => {
     if (__DEV__) {
       const url = response.config?.url ?? '';
-      if (url.includes('/patient-profile') || url.includes('/foods')) {
+      if (
+        url.includes('/patient-profile') ||
+        url.includes('/foods') ||
+        url.includes('/image-calorie-analyzer') ||
+        url.includes('/upload/intake-image') ||
+        url.includes('/additional-intake')
+      ) {
         console.log('[api][response]', {
           status: response.status,
           url,
@@ -85,6 +98,20 @@ apiClient.interceptors.response.use(
   // Error — lo convierte en un mensaje claro
   async (error: AxiosError<ApiErrorResponse>) => {
     const originalRequest = error.config;
+
+    if (__DEV__) {
+      const cfg = error.config as any;
+      console.log('[api][error]', {
+        url: cfg?.url,
+        baseURL: cfg?.baseURL,
+        method: cfg?.method,
+        timeout: cfg?.timeout,
+        code: (error as any).code,
+        message: error.message,
+        hasResponse: Boolean(error.response),
+        status: error.response?.status,
+      });
+    }
     
     // Si el error es 401 (Token expirado/inválido), intentamos renovar
     if (error.response?.status === 401 && originalRequest && !(originalRequest as any)._retry) {
@@ -180,11 +207,14 @@ apiClient.interceptors.response.use(
       return Promise.reject(normalizedError);
     }
 
+    const networkCode = (error as any).code as string | undefined;
+    if (networkCode === 'ECONNABORTED') {
+      return Promise.reject(new Error('La solicitud tardó demasiado (timeout). Intenta de nuevo.'));
+    }
+
     if (error.request) {
       // La petición se envió pero no hubo respuesta (sin internet, API caída)
-      return Promise.reject(
-        new Error('Sin conexión. Verifica tu internet e intenta de nuevo.')
-      );
+      return Promise.reject(new Error('Sin conexión. Verifica tu internet e intenta de nuevo.'));
     }
 
     // Error al configurar la petición

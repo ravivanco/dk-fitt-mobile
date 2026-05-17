@@ -34,29 +34,63 @@ function normalizeEstimation(input: unknown): IntakeEstimation {
   if (!input || typeof input !== 'object') return {};
 
   const record = input as Record<string, unknown>;
-  const items = Array.isArray(record.items) ? (record.items as any[]) : undefined;
+  const itemsFromApi = Array.isArray(record.items) ? (record.items as any[]) : undefined;
 
-  const caloriasEstimadas =
-    typeof record.calorias_estimadas === 'number' ? (record.calorias_estimadas as number) : undefined;
-  const confianzaPct =
-    typeof record.confianza_pct === 'number' ? (record.confianza_pct as number) : undefined;
+  const alimentosDetectados = Array.isArray(record.alimentos_detectados)
+    ? (record.alimentos_detectados as any[])
+    : undefined;
 
+  const itemsFromAlimentos =
+    alimentosDetectados?.map((food) => {
+      const name = typeof food?.nombre === 'string' ? food.nombre : undefined;
+      const caloriesRaw = food?.calorias;
+      const calories = typeof caloriesRaw === 'number' ? caloriesRaw : undefined;
+      return name ? { name, calories } : null;
+    }).filter(Boolean) ?? undefined;
+
+  // Extraer calorias_estimadas con coerción de string→number
+  const caloriasEstimadas = (() => {
+    if (typeof record.calorias_estimadas === 'number') return record.calorias_estimadas as number;
+    if (typeof record.calorias_estimadas === 'string') {
+      const parsed = Number(record.calorias_estimadas);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+  })();
+
+  const confianzaPct = (() => {
+    if (typeof record.confianza_pct === 'number') return record.confianza_pct as number;
+    if (typeof record.confianza_pct === 'string') {
+      const parsed = Number(record.confianza_pct);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+  })();
+
+  // totalCalories: priorizar campo explícito, luego calorias_estimadas
   const totalCalories =
     typeof record.totalCalories === 'number'
-      ? record.totalCalories
+      ? (record.totalCalories as number)
       : typeof record.total_calories === 'number'
         ? (record.total_calories as number)
         : typeof caloriasEstimadas === 'number'
           ? caloriasEstimadas
-        : undefined;
+          : undefined;
 
-  return {
+  // Construir resultado: el spread pone todos los campos del record primero,
+  // luego sobreescribimos SOLO los campos que tenemos un valor normalizado.
+  const result: IntakeEstimation = {
     ...record,
-    items,
-    totalCalories,
-    calorias_estimadas: caloriasEstimadas,
-    confianza_pct: confianzaPct,
+    alimentos_detectados: alimentosDetectados ?? (record.alimentos_detectados as any),
+    items: itemsFromApi ?? itemsFromAlimentos ?? (record.items as any),
   };
+
+  // Solo sobreescribir si tenemos valor real (evita borrar con undefined)
+  if (typeof caloriasEstimadas === 'number') result.calorias_estimadas = caloriasEstimadas;
+  if (typeof confianzaPct === 'number') result.confianza_pct = confianzaPct;
+  if (typeof totalCalories === 'number') result.totalCalories = totalCalories;
+
+  return result;
 }
 
 export const intakeImageService = {
@@ -81,13 +115,13 @@ export const intakeImageService = {
   },
 
   async analyzeImage(body: AnalyzeImageRequest): Promise<AnalyzeImageUrlResponse> {
-    const response = await apiClient.post('/image-calorie-analyzer/analyze', body, { timeout: 30_000 });
+    const response = await apiClient.post('/image-calorie-analyzer/analyze', body, { timeout: 60_000 });
     const data = unwrapApi<AnalyzeImageUrlResponse>(response.data);
     return normalizeEstimation(data) as AnalyzeImageUrlResponse;
   },
 
   async analyzeAdditionalIntake(body: AnalyzeImageRequest): Promise<AnalyzeImageUrlResponse> {
-    const response = await apiClient.post('/additional-intake/analyze', body, { timeout: 30_000 });
+    const response = await apiClient.post('/additional-intake/analyze', body, { timeout: 60_000 });
     const data = unwrapApi<AnalyzeImageUrlResponse>(response.data);
     return normalizeEstimation(data) as AnalyzeImageUrlResponse;
   },
@@ -98,6 +132,7 @@ export const intakeImageService = {
   }): Promise<UploadIntakeImageResponse> {
     const formData = new FormData();
 
+    // Backend actual espera el campo `image` (ver mensaje 400: "Usa el campo \"image\"")
     formData.append('image', {
       uri: params.imageUri,
       name: guessFileName(params.imageUri),
@@ -112,18 +147,33 @@ export const intakeImageService = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
-      timeout: 30_000,
+      timeout: 60_000,
     });
 
     const data = unwrapApi<UploadIntakeImageResponse>(response.data);
+    if (!data || typeof data !== 'object') {
+      return {} as UploadIntakeImageResponse;
+    }
+
+    const imagen_url =
+      typeof (data as any).imagen_url === 'string'
+        ? (data as any).imagen_url
+        : typeof (data as any).url === 'string'
+          ? (data as any).url
+          : typeof (data as any).secure_url === 'string'
+            ? (data as any).secure_url
+            : typeof (data as any).upload?.secure_url === 'string'
+              ? (data as any).upload.secure_url
+              : typeof (data as any).upload?.url === 'string'
+                ? (data as any).upload.url
+                : undefined;
 
     const estimationRaw =
-      (data && typeof data === 'object' && (data as any).estimacion) ? (data as any).estimacion :
-      (data && typeof data === 'object' && (data as any).estimation) ? (data as any).estimation :
-      data;
+      (data as any).estimacion ?? (data as any).estimation ?? (data as any).data ?? data;
 
     return {
-      ...(data && typeof data === 'object' ? data : {}),
+      ...(data as any),
+      imagen_url,
       estimacion: normalizeEstimation(estimationRaw),
     } as UploadIntakeImageResponse;
   },

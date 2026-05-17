@@ -26,7 +26,7 @@ import {
   CalorieDashboard,
   FoodEstimate,
   confirmEstimatedMeal,
-  estimateMealFromPhoto,
+  estimateMealFromUploadedImage,
   getCalorieProgress,
   getLatestWeight,
   getRemainingCalories,
@@ -110,10 +110,14 @@ export default function ControlCaloricoScreen() {
   const [loading, setLoading] = useState(true);
   const [weightInput, setWeightInput] = useState('');
   const [savingWeight, setSavingWeight] = useState(false);
-  const [estimating, setEstimating] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [analyzingPhoto, setAnalyzingPhoto] = useState(false);
   const [estimate, setEstimate] = useState<FoodEstimate | null>(null);
+  const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [mealDescription, setMealDescription] = useState('');
   const [confirmingMeal, setConfirmingMeal] = useState(false);
+  const [manualCalories, setManualCalories] = useState('');
 
   const loadDashboardState = React.useCallback(async () => {
     let mounted = true;
@@ -228,12 +232,17 @@ export default function ControlCaloricoScreen() {
       }
 
       setEstimate(null);
-      setEstimating(true);
-      const nextEstimate = await estimateMealFromPhoto(
-        result.assets[0].uri,
-        mealDescription.trim().length > 0 ? mealDescription.trim() : undefined,
-      );
-      setEstimate(nextEstimate);
+      setSelectedImageUri(result.assets[0].uri);
+      setUploadedImageUrl(null);
+      setManualCalories('');
+
+      setUploadingPhoto(true);
+      const upload = await intakeImageService.uploadIntakeImage({ imageUri: result.assets[0].uri });
+      const url = typeof upload?.imagen_url === 'string' ? upload.imagen_url : undefined;
+      if (!url) {
+        throw new Error('No se pudo subir la imagen. Verifica tu conexión.');
+      }
+      setUploadedImageUrl(url);
     } catch (error: any) {
       const status = typeof error?.status === 'number' ? error.status : undefined;
       if (status === 401) {
@@ -241,10 +250,15 @@ export default function ControlCaloricoScreen() {
       } else if (status === 403) {
         Alert.alert('Acceso restringido', 'Tu cuenta no tiene permiso para analizar imágenes.');
       } else {
-        Alert.alert('Error', error?.message ?? 'No pudimos analizar la foto en este momento.');
+        const message = typeof error?.message === 'string' ? error.message : '';
+        if (message.toLowerCase().includes('subir la imagen')) {
+          Alert.alert('Error', 'No se pudo subir la imagen. Verifica tu conexiÃ³n.');
+        } else {
+          Alert.alert('Error', 'No se pudo analizar la imagen. Intenta de nuevo.');
+        }
       }
     } finally {
-      setEstimating(false);
+      setUploadingPhoto(false);
     }
   };
 
@@ -253,19 +267,71 @@ export default function ControlCaloricoScreen() {
 
     try {
       setConfirmingMeal(true);
-      await intakeImageService.uploadIntakeImage({
-        imageUri: estimate.imageUri,
-        descripcion_alimento: mealDescription.trim().length > 0 ? mealDescription.trim() : undefined,
-      });
+      const needsManual = Boolean(estimate.requiresManualCalories);
+      const manualValue = Number(manualCalories.replace(',', '.'));
+      if (needsManual) {
+        if (!manualValue || Number.isNaN(manualValue) || manualValue < 1 || manualValue > 5000) {
+          Alert.alert('Calorías requeridas', 'Ingresa un valor válido para registrar esta comida.');
+          return;
+        }
+      }
 
-      const updated = await confirmEstimatedMeal(estimate);
+      const updated = await confirmEstimatedMeal({
+        ...estimate,
+        calories: needsManual ? Math.round(manualValue) : estimate.calories,
+      });
       setDashboard(updated);
       setEstimate(null);
-      Alert.alert('Comida registrada', 'Las calorias y macros ya impactan tu resumen del dia.');
+      setSelectedImageUri(null);
+      setUploadedImageUrl(null);
+      setMealDescription('');
+      Alert.alert('Comida registrada', 'Las calorías ya impactan tu resumen del día.');
     } catch {
       Alert.alert('Error', 'No pudimos registrar esta comida.');
     } finally {
       setConfirmingMeal(false);
+    }
+  };
+
+  const handleCalculate = async () => {
+    if (!selectedImageUri || !uploadedImageUrl) {
+      Alert.alert('Foto requerida', 'Primero toma o sube una foto para poder calcular.');
+      return;
+    }
+
+    try {
+      setAnalyzingPhoto(true);
+      setEstimate(null);
+
+      const description = mealDescription.trim().length > 0 ? mealDescription.trim() : undefined;
+      const nextEstimate = await estimateMealFromUploadedImage({
+        uploadedImageUrl,
+        previewImageUri: selectedImageUri,
+        descripcion_alimento: description,
+      });
+
+      if (__DEV__) {
+        console.log('[ui][estimate]', {
+          calories: nextEstimate.calories,
+          requiresManualCalories: nextEstimate.requiresManualCalories,
+          fuente_estimacion: nextEstimate.estimation?.fuente_estimacion,
+          calorias_estimadas: nextEstimate.estimation?.calorias_estimadas,
+        });
+      }
+
+      setManualCalories(nextEstimate.requiresManualCalories ? '' : `${nextEstimate.calories}`);
+      setEstimate(nextEstimate);
+    } catch (error: any) {
+      const status = typeof error?.status === 'number' ? error.status : undefined;
+      if (status === 401) {
+        Alert.alert('Sesión requerida', 'Inicia sesión para poder analizar tu comida.');
+      } else if (status === 403) {
+        Alert.alert('Acceso restringido', 'Tu cuenta no tiene permiso para analizar imágenes.');
+      } else {
+        Alert.alert('Error', 'No se pudo analizar la imagen. Intenta de nuevo.');
+      }
+    } finally {
+      setAnalyzingPhoto(false);
     }
   };
 
@@ -400,7 +466,7 @@ export default function ControlCaloricoScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.sectionTitle}>Cuenta tus calorias</Text>
                 <Text style={styles.sectionNote}>
-                  Toma una foto y recibe una estimacion de calorias.
+                  Toma o sube una foto, agrega una descripcion opcional y presiona Calcular.
                 </Text>
               </View>
               <View style={styles.scanIconBadge}>
@@ -408,72 +474,108 @@ export default function ControlCaloricoScreen() {
               </View>
             </View>
 
-            <View style={styles.scanActionsRow}>
-              <TouchableOpacity style={styles.scanAction} onPress={() => void handleAnalyzePhoto('camera')}>
-                <MaterialCommunityIcons name="camera-outline" size={24} color="#f97316" />
-                <Text style={styles.scanActionTitle}>Tomar foto</Text>
-                <Text style={styles.scanActionText}>Captura la comida ahora</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.scanAction} onPress={() => void handleAnalyzePhoto('library')}>
-                <MaterialCommunityIcons name="image-outline" size={24} color="#1aa44f" />
-                <Text style={styles.scanActionTitle}>Subir foto</Text>
-                <Text style={styles.scanActionText}>Usa una imagen guardada</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.descriptionCard}>
-              <View style={styles.descriptionHeader}>
-                <MaterialCommunityIcons name="text-short" size={18} color="#8e8579" />
-                <Text style={styles.descriptionTitle}>Descripción (opcional)</Text>
-              </View>
-              <TextInput
-                value={mealDescription}
-                onChangeText={setMealDescription}
-                placeholder="Ej: hamburguesa, pizza, ensalada..."
-                placeholderTextColor="#b7b0a6"
-                style={styles.descriptionInput}
-                maxLength={80}
-                returnKeyType="done"
-              />
-              <Text style={styles.descriptionHint}>
-                Ayuda a la IA a estimar mejor cuando la foto no es clara.
-              </Text>
-            </View>
-
-            {estimating && (
-              <View style={styles.analysisCard}>
-                <ActivityIndicator size="small" color="#f97316" />
-                <Text style={styles.analysisTitle}>Analizando comida...</Text>
-                <Text style={styles.analysisText}>Estamos estimando calorias, impacto y sugerencia de ejercicio.</Text>
+            {/* ── PASO 1: Botones de seleccion de foto ── */}
+            {!selectedImageUri && !uploadingPhoto && (
+              <View style={styles.scanActionsRow}>
+                <TouchableOpacity style={styles.scanAction} onPress={() => void handleAnalyzePhoto('camera')} disabled={uploadingPhoto}>
+                  <MaterialCommunityIcons name="camera-outline" size={24} color="#f97316" />
+                  <Text style={styles.scanActionTitle}>Tomar foto</Text>
+                  <Text style={styles.scanActionText}>Captura la comida ahora</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.scanAction} onPress={() => void handleAnalyzePhoto('library')} disabled={uploadingPhoto}>
+                  <MaterialCommunityIcons name="image-outline" size={24} color="#1aa44f" />
+                  <Text style={styles.scanActionTitle}>Subir foto</Text>
+                  <Text style={styles.scanActionText}>Usa una imagen guardada</Text>
+                </TouchableOpacity>
               </View>
             )}
 
+            {/* ── Cargando: subiendo imagen ── */}
+            {uploadingPhoto && (
+              <View style={styles.analysisCard}>
+                <ActivityIndicator size="small" color="#f97316" />
+                <Text style={styles.analysisTitle}>Subiendo foto...</Text>
+                <Text style={styles.analysisText}>Guardando imagen en el servidor.</Text>
+              </View>
+            )}
+
+            {/* ── PASO 2: Preview + descripcion + boton Calcular ── */}
+            {selectedImageUri && uploadedImageUrl && !estimate && !analyzingPhoto && !uploadingPhoto && (
+              <View>
+                {/* Imagen preview */}
+                <View style={styles.previewCard}>
+                  <Image source={{ uri: selectedImageUri }} style={styles.previewImage} resizeMode="cover" />
+                </View>
+
+                {/* Campo de descripcion */}
+                <View style={[styles.descriptionCard, { marginTop: 12 }]}>
+                  <View style={styles.descriptionHeader}>
+                    <MaterialCommunityIcons name="text-short" size={18} color="#8e8579" />
+                    <Text style={styles.descriptionTitle}>Descripci\u00f3n (opcional)</Text>
+                  </View>
+                  <TextInput
+                    value={mealDescription}
+                    onChangeText={setMealDescription}
+                    placeholder="Ej: hamburguesa, pizza, ensalada..."
+                    placeholderTextColor="#b7b0a6"
+                    style={styles.descriptionInput}
+                    maxLength={80}
+                    returnKeyType="done"
+                  />
+                  <Text style={styles.descriptionHint}>
+                    Ayuda a la IA a estimar mejor cuando la foto no es clara.
+                  </Text>
+                </View>
+
+                {/* Boton Calcular */}
+                <TouchableOpacity style={styles.calcMainButton} onPress={() => void handleCalculate()} activeOpacity={0.85}>
+                  <MaterialCommunityIcons name="calculator-variant-outline" size={22} color="#ffffff" />
+                  <Text style={styles.calcMainButtonText}>Calcular calor\u00edas</Text>
+                </TouchableOpacity>
+
+                {/* Cambiar foto */}
+                <TouchableOpacity
+                  onPress={() => { setSelectedImageUri(null); setUploadedImageUrl(null); setMealDescription(''); }}
+                  style={{ alignItems: 'center', marginTop: 10, paddingVertical: 6 }}
+                >
+                  <Text style={{ color: '#9a9389', fontSize: 12, fontWeight: '700' }}>Cambiar foto</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* ── Cargando: analizando ── */}
+            {analyzingPhoto && (
+              <View style={styles.analysisCard}>
+                <ActivityIndicator size="small" color="#f97316" />
+                <Text style={styles.analysisTitle}>Analizando comida...</Text>
+                <Text style={styles.analysisText}>La IA est\u00e1 estimando calor\u00edas y macros.</Text>
+              </View>
+            )}
+
+            {/* ── PASO 3: Resultado ── */}
             {estimate && (
               <View style={styles.estimateCard}>
                 <Image source={{ uri: estimate.imageUri }} style={styles.estimateImage} />
 
                 <View style={styles.estimateContent}>
+                  {/* Nombre + badge */}
                   <View style={styles.estimateTopRow}>
-                    <View>
+                    <View style={{ flex: 1 }}>
                       <Text style={styles.estimateName}>{estimate.name}</Text>
-                      <Text style={styles.estimateKcal}>{estimate.calories} kcal estimadas</Text>
+                      <Text style={styles.estimateKcal}>
+                        {estimate.requiresManualCalories
+                          ? 'Calor\u00edas no detectadas'
+                          : `${estimate.calories} kcal estimadas`}
+                      </Text>
                     </View>
-                    <View
-                      style={[
-                        styles.alertBadge,
-                        { backgroundColor: estimate.alertTone === 'high' ? '#fef2f2' : '#fff7ed' },
-                      ]}>
-                      <Text
-                        style={[
-                          styles.alertBadgeText,
-                          { color: estimate.alertTone === 'high' ? '#ef4444' : '#f97316' },
-                        ]}>
+                    <View style={[styles.alertBadge, { backgroundColor: estimate.alertTone === 'high' ? '#fef2f2' : '#fff7ed' }]}>
+                      <Text style={[styles.alertBadgeText, { color: estimate.alertTone === 'high' ? '#ef4444' : '#f97316' }]}>
                         {estimate.alertTone === 'high' ? 'Alto impacto' : 'Impacto medio'}
                       </Text>
                     </View>
                   </View>
 
+                  {/* Alerta nutricional */}
                   <View style={styles.alertCard}>
                     <MaterialCommunityIcons name="alert-circle-outline" size={18} color="#ef4444" />
                     <View style={{ flex: 1 }}>
@@ -482,6 +584,104 @@ export default function ControlCaloricoScreen() {
                     </View>
                   </View>
 
+                  {/* Baja confianza */}
+                  {typeof estimate.estimation?.confianza_pct === 'number' && estimate.estimation.confianza_pct < 50 && (
+                    <View style={styles.warningCard}>
+                      <MaterialCommunityIcons name="alert" size={18} color="#f97316" />
+                      <Text style={styles.warningText}>
+                        Estimaci\u00f3n con baja confianza ({Math.round(estimate.estimation.confianza_pct)}%). Revisa y ajusta si es necesario.
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Pills de meta */}
+                  <View style={styles.metaGrid}>
+                    {typeof estimate.estimation?.confianza_pct === 'number' && (
+                      <View style={styles.metaPill}>
+                        <MaterialCommunityIcons name="shield-check-outline" size={16} color="#1aa44f" />
+                        <Text style={styles.metaPillText}>Confianza: {Math.round(estimate.estimation.confianza_pct)}%</Text>
+                      </View>
+                    )}
+                    {typeof estimate.estimation?.porcion_estimada_g === 'number' && (
+                      <View style={styles.metaPill}>
+                        <MaterialCommunityIcons name="scale-bathroom" size={16} color="#8b5cf6" />
+                        <Text style={styles.metaPillText}>Porci\u00f3n: {Math.round(estimate.estimation.porcion_estimada_g)} g</Text>
+                      </View>
+                    )}
+                    {typeof estimate.estimation?.fuente_estimacion === 'string' && (
+                      <View style={styles.metaPill}>
+                        <MaterialCommunityIcons name="robot-outline" size={16} color="#64748b" />
+                        <Text style={styles.metaPillText}>Fuente: {estimate.estimation.fuente_estimacion}</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Input manual si no se pudo estimar */}
+                  {estimate.requiresManualCalories && (
+                    <View style={styles.manualCard}>
+                      <Text style={styles.manualTitle}>No se pudo estimar con seguridad</Text>
+                      <Text style={styles.manualText}>Ingresa las calor\u00edas manualmente para registrarla.</Text>
+                      <View style={styles.manualInputRow}>
+                        <TextInput
+                          value={manualCalories}
+                          onChangeText={setManualCalories}
+                          placeholder="Ej: 650"
+                          placeholderTextColor="#b7b0a6"
+                          keyboardType="numeric"
+                          style={styles.manualInput}
+                          maxLength={5}
+                        />
+                        <Text style={styles.manualUnit}>kcal</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Macros */}
+                  {estimate.estimation?.macros && (
+                    <View style={styles.macrosCard}>
+                      <Text style={styles.macrosTitle}>Macros</Text>
+                      <View style={styles.macrosRowApi}>
+                        <View style={styles.macroChip}>
+                          <Text style={styles.macroChipLabel}>Prote\u00ednas</Text>
+                          <Text style={styles.macroChipValue}>{Math.round(Number(estimate.estimation.macros.proteinas_g ?? 0))} g</Text>
+                        </View>
+                        <View style={styles.macroChip}>
+                          <Text style={styles.macroChipLabel}>Carbs</Text>
+                          <Text style={styles.macroChipValue}>{Math.round(Number(estimate.estimation.macros.carbohidratos_g ?? 0))} g</Text>
+                        </View>
+                        <View style={styles.macroChip}>
+                          <Text style={styles.macroChipLabel}>Grasas</Text>
+                          <Text style={styles.macroChipValue}>{Math.round(Number(estimate.estimation.macros.grasas_g ?? 0))} g</Text>
+                        </View>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Alimentos detectados */}
+                  {Array.isArray(estimate.estimation?.alimentos_detectados) && estimate.estimation.alimentos_detectados.length > 0 && (
+                    <View style={styles.foodsCard}>
+                      <Text style={styles.foodsTitle}>Alimentos detectados</Text>
+                      {estimate.estimation.alimentos_detectados.slice(0, 10).map((food: any, index: number) => (
+                        <View key={`food-${index}`} style={styles.foodRow}>
+                          <Text style={styles.foodName}>{food?.nombre ?? 'Alimento'}</Text>
+                          <Text style={styles.foodMeta}>
+                            {typeof food?.cantidad_g === 'number' ? `${Math.round(food.cantidad_g)} g \u2022 ` : ''}
+                            {typeof food?.calorias === 'number' ? `${Math.round(food.calorias)} kcal` : ''}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Mensaje de la IA */}
+                  {typeof estimate.estimation?.mensaje === 'string' && estimate.estimation.mensaje.trim().length > 0 && (
+                    <View style={styles.messageCard}>
+                      <MaterialCommunityIcons name="information-outline" size={18} color="#64748b" />
+                      <Text style={styles.messageText}>{estimate.estimation.mensaje}</Text>
+                    </View>
+                  )}
+
+                  {/* Sugerencias de ejercicio */}
                   <Text style={styles.exerciseTitle}>Si decides consumirla, te sugerimos:</Text>
                   <View style={styles.exerciseChips}>
                     {estimate.exerciseSuggestions.map((suggestion) => (
@@ -491,24 +691,33 @@ export default function ControlCaloricoScreen() {
                     ))}
                   </View>
 
+                  {/* Acciones */}
                   <View style={styles.estimateButtons}>
-                    <TouchableOpacity style={styles.secondaryButton} onPress={() => setEstimate(null)}>
+                    <TouchableOpacity
+                      style={styles.secondaryButton}
+                      onPress={() => {
+                        setEstimate(null);
+                        setSelectedImageUri(null);
+                        setUploadedImageUrl(null);
+                        setMealDescription('');
+                      }}
+                    >
                       <View style={styles.decisionContent}>
-                        <Text style={styles.decisionEmoji}>✕</Text>
-                        <Text style={styles.secondaryButtonText}>No</Text>
+                        <Text style={styles.decisionEmoji}>\u2715</Text>
+                        <Text style={styles.secondaryButtonText}>Descartar</Text>
                       </View>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.primaryButton, confirmingMeal && { opacity: 0.75 }]}
                       disabled={confirmingMeal}
-                      onPress={() => void handleConfirmEstimate()}>
+                      onPress={() => void handleConfirmEstimate()}
+                    >
                       <View style={styles.decisionContent}>
-                        {confirmingMeal ? (
-                          <ActivityIndicator size="small" color="#ffffff" />
-                        ) : (
-                          <Text style={styles.decisionEmoji}>✓</Text>
-                        )}
-                        <Text style={styles.primaryButtonText}>{confirmingMeal ? 'Guardando...' : 'Si'}</Text>
+                        {confirmingMeal
+                          ? <ActivityIndicator size="small" color="#ffffff" />
+                          : <Text style={styles.decisionEmoji}>\u2713</Text>
+                        }
+                        <Text style={styles.primaryButtonText}>{confirmingMeal ? 'Guardando...' : 'Registrar'}</Text>
                       </View>
                     </TouchableOpacity>
                   </View>
@@ -959,6 +1168,46 @@ const styles = StyleSheet.create({
     color: '#8e8579',
     textAlign: 'center',
   },
+  previewCard: {
+    marginTop: 14,
+    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#efebe4',
+    overflow: 'hidden',
+  },
+  previewImage: {
+    width: '100%',
+    height: 190,
+  },
+  calculateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    height: 52,
+    backgroundColor: '#f97316',
+  },
+  calculateButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  calcMainButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    height: 52,
+    backgroundColor: '#f97316',
+    borderRadius: 16,
+    marginTop: 12,
+  },
+  calcMainButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
   estimateCard: {
     marginTop: 14,
     borderRadius: 20,
@@ -1052,6 +1301,175 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 16,
+  },
+  warningCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fff7ed',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    padding: 12,
+    borderRadius: 14,
+    marginTop: 12,
+  },
+  warningText: {
+    flex: 1,
+    color: '#7c2d12',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  metaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  metaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+  },
+  metaPillText: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  manualCard: {
+    marginTop: 12,
+    backgroundColor: '#fcfaf6',
+    borderWidth: 1,
+    borderColor: '#efe6d8',
+    padding: 12,
+    borderRadius: 16,
+  },
+  manualTitle: {
+    color: '#11141b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  manualText: {
+    marginTop: 4,
+    color: '#8e8579',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  manualInputRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  manualInput: {
+    flex: 1,
+    height: 44,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#efe6d8',
+    paddingHorizontal: 12,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f1115',
+  },
+  manualUnit: {
+    color: '#8e8579',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  macrosCard: {
+    marginTop: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    borderRadius: 16,
+  },
+  macrosTitle: {
+    color: '#11141b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  macrosRowApi: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  macroChip: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+  },
+  macroChipLabel: {
+    color: '#8e8579',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  macroChipValue: {
+    marginTop: 4,
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  foodsCard: {
+    marginTop: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#efebe4',
+    padding: 12,
+    borderRadius: 16,
+  },
+  foodsTitle: {
+    color: '#11141b',
+    fontSize: 13,
+    fontWeight: '900',
+    marginBottom: 8,
+  },
+  foodRow: {
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderColor: '#f1efe9',
+  },
+  foodName: {
+    color: '#11141b',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  foodMeta: {
+    marginTop: 2,
+    color: '#8e8579',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  messageCard: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    borderRadius: 16,
+  },
+  messageText: {
+    flex: 1,
+    color: '#334155',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   decisionContent: {
     flexDirection: 'row',
