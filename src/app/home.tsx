@@ -51,6 +51,13 @@ function formatLocalIsoDate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function showComingSoon(moduleName?: string) {
+  router.push({
+    pathname: '/proximamente',
+    params: moduleName ? { module: moduleName } : {},
+  });
+}
+
 function ProgressRing({
   size,
   strokeWidth,
@@ -529,7 +536,7 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.cardsGrid}>
-            <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/menus')} activeOpacity={0.7}>
+            <TouchableOpacity style={styles.gridCard} onPress={() => showComingSoon('Menús')} activeOpacity={0.7}>
               <View style={styles.cardSmall}>
                 <View style={styles.iconContainerCover}>
                   <Image source={require('@/assets/images/Menu.png')} style={styles.cardImageCover} resizeMode="cover" />

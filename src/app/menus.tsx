@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -32,7 +33,10 @@ export default function MenusScreen() {
                 Opciones de comidas saludables adaptadas a tu plan diario.
               </Text>
 
-              <TouchableOpacity style={styles.button} activeOpacity={0.7}>
+              <TouchableOpacity
+                style={styles.button}
+                activeOpacity={0.7}
+                onPress={() => router.push({ pathname: '/proximamente', params: { module: 'Menús' } })}>
                 <Text style={styles.buttonText}>Explorar</Text>
               </TouchableOpacity>
             </View>
