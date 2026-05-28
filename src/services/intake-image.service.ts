@@ -2,6 +2,8 @@ import { apiClient } from './api.client';
 import * as FileSystem from 'expo-file-system/legacy';
 import { ApiSuccessResponse } from '@/types/auth.types';
 import {
+  AdditionalIntakeRecord,
+  AdditionalIntakeRequest,
   AnalyzeImageRequest,
   AnalyzeImageUrlResponse,
   IntakeEstimation,
@@ -124,6 +126,28 @@ export const intakeImageService = {
     const response = await apiClient.post('/additional-intake/analyze', body, { timeout: 60_000 });
     const data = unwrapApi<AnalyzeImageUrlResponse>(response.data);
     return normalizeEstimation(data) as AnalyzeImageUrlResponse;
+  },
+
+  async registerAdditionalIntake(body: AdditionalIntakeRequest): Promise<AdditionalIntakeRecord> {
+    const response = await apiClient.post('/additional-intake', body, { timeout: 60_000 });
+    return unwrapApi<AdditionalIntakeRecord>(response.data);
+  },
+
+  async confirmAdditionalIntake(params: { id_consumo_adicional: number | string; calorias_estimadas: number }): Promise<unknown> {
+    const response = await apiClient.patch(
+      `/additional-intake/${encodeURIComponent(String(params.id_consumo_adicional))}/confirm`,
+      { calorias_estimadas: Math.round(params.calorias_estimadas) },
+      { timeout: 60_000 },
+    );
+    return unwrapApi<unknown>(response.data);
+  },
+
+  async discardAdditionalIntake(id_consumo_adicional: number | string): Promise<unknown> {
+    // Backend actualizado: eliminaciÃ³n fÃ­sica y recÃ¡lculo del control calÃ³rico
+    const response = await apiClient.delete(`/additional-intake/${encodeURIComponent(String(id_consumo_adicional))}`, {
+      timeout: 60_000,
+    });
+    return unwrapApi<unknown>(response.data);
   },
 
   async uploadIntakeImage(params: {

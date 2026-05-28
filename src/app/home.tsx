@@ -10,9 +10,15 @@ import { FormBackgroundDecor } from '@/components/forms/components/form-backgrou
 import { BottomNav } from '@/components/navigation/bottom-nav';
 import { apiClient } from '@/services/api.client';
 import {
-  CalorieDashboard,
   loadCalorieDashboard
 } from '@/services/calorie.service';
+import { fetchCalorieControlDashboard, type CalorieControlDashboard } from '@/services/calorie-control.service';
+import {
+  getCachedCalorieControlDashboard,
+  refreshCalorieControlDashboard,
+  setCachedCalorieControlDashboard,
+  subscribeCalorieControlDashboard,
+} from '@/store/calorie-control-dashboard.store';
 import { authStore } from '@/store/auth.store';
 
 type MacroRingProps = {
@@ -26,10 +32,23 @@ type MacroRingProps = {
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
+function deriveMacroStatus(percent: number) {
+  if (percent >= 60) return 'Alto';
+  if (percent >= 40) return 'Medio';
+  return 'Bajo';
+}
+
 function addDays(date: Date, days: number) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
+}
+
+function formatLocalIsoDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function ProgressRing({
@@ -96,7 +115,7 @@ function MacroRing({ value, color, icon, label, status }: MacroRingProps) {
 export default function HomeScreen() {
   const [userName, setUserName] = useState('Usuario');
   const [userEval, setUserEval] = useState<any>(null);
-  const [dashboard, setDashboard] = useState<CalorieDashboard | null>(null);
+  const [dashboard, setDashboard] = useState<CalorieControlDashboard | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -108,7 +127,7 @@ export default function HomeScreen() {
         if (user?.nombres) {
           setUserName(user.nombres);
         }
-        
+
         try {
           const evalRes = await apiClient.get('/clinical-evaluations/me/history');
           if (mounted && evalRes.data?.data && Array.isArray(evalRes.data.data) && evalRes.data.data.length > 0) {
@@ -150,9 +169,44 @@ export default function HomeScreen() {
       let active = true;
 
       const loadDashboardState = async () => {
-        const nextDashboard = await loadCalorieDashboard();
-        if (active) {
-          setDashboard(nextDashboard);
+        const today = formatLocalIsoDate();
+
+        // ─── LOG 1: ¿Qué fecha se está usando? ───
+        console.log('[HOME][1] Fecha enviada al dashboard:', today);
+
+        const cached = getCachedCalorieControlDashboard(today);
+        if (cached && active) {
+          console.log('[HOME][2] Cache encontrada:', JSON.stringify(cached?.balance));
+          setDashboard(cached);
+        }
+        try {
+          const nextDashboard = await refreshCalorieControlDashboard(today);
+
+          // ─── LOG 2: ¿Qué devuelve el endpoint? ───
+          console.log('[HOME][3] Dashboard recibido RAW:', JSON.stringify(nextDashboard));
+          console.log('[HOME][4] balance object:', JSON.stringify(nextDashboard?.balance));
+          console.log('[HOME][5] dailyTarget:', nextDashboard?.balance?.dailyTarget);
+          console.log('[HOME][6] consumedCalories:', nextDashboard?.balance?.consumedCalories);
+          console.log('[HOME][7] remainingCalories:', nextDashboard?.balance?.remainingCalories);
+
+          if (active) setDashboard(nextDashboard);
+        } catch (err) {
+          // ─── LOG 3: ¿Está cayendo al fallback? ───
+          console.warn('[HOME][8] ERROR — cayó al fallback legacy:', err);
+          const legacy = await loadCalorieDashboard();
+          console.log('[HOME][9] Legacy dashboard:', JSON.stringify(legacy));
+          if (!active) return;
+          const fallback = {
+            balance: {
+              dailyTarget: legacy.dailyTarget,
+              consumedCalories: legacy.consumedCalories,
+              remainingCalories: legacy.dailyTarget - legacy.consumedCalories,
+            },
+            meals: [],
+            additionalIntakes: [],
+          };
+          setDashboard(fallback);
+          setCachedCalorieControlDashboard(today, fallback);
         }
       };
 
@@ -163,6 +217,13 @@ export default function HomeScreen() {
       };
     }, [])
   );
+
+  useEffect(() => {
+    const today = formatLocalIsoDate();
+    return subscribeCalorieControlDashboard(today, () => {
+      setDashboard(getCachedCalorieControlDashboard(today) ?? null);
+    });
+  }, []);
 
   const today = useMemo(() => new Date(), []);
   const weekDays = useMemo(
@@ -185,24 +246,41 @@ export default function HomeScreen() {
     [today]
   );
 
-  const planActive = dashboard?.planActive ?? true;
+  const planActive = userEval !== null;
 
   // Paciente nuevo sin evaluación clínica → la nutricionista no ha ingresado datos aún
   const hasEval = userEval !== null;
 
   const dailyTarget = hasEval
-    ? (userEval?.calorias_diarias_calculadas ?? dashboard?.dailyTarget ?? 1771)
+    ? (userEval?.calorias_diarias_calculadas ?? dashboard?.balance?.dailyTarget ?? 1771)
     : 0;
-  const calorieValue = hasEval ? dailyTarget : 0;
-  const calorieProgress = hasEval ? 1 : 0;
-  const calorieRingColor = hasEval ? '#1aa44f' : '#d9d4cc';
+  const consumedCalories = hasEval ? (dashboard?.balance?.consumedCalories ?? 0) : 0;
+  const consumedAdditionalCalories = hasEval ? (dashboard?.balance?.consumedAdditionalCalories ?? 0) : 0;
+  const consumedPlanCalories = hasEval
+    ? (dashboard?.balance?.consumedPlanCalories ?? Math.max(0, consumedCalories - consumedAdditionalCalories))
+    : 0;
+  const totalConsumedCalories = hasEval ? Math.max(0, consumedCalories) : 0;
+  const exceededCalories = hasEval ? Math.max(0, totalConsumedCalories - dailyTarget) : 0;
+  const excessColor = exceededCalories >= 300 ? '#ef4444' : '#f97316';
+  const excessBg = exceededCalories >= 300 ? '#fee2e2' : '#ffedd5';
+  const additionalProgress = hasEval
+    ? Math.max(0, Math.min(1, consumedAdditionalCalories / (dailyTarget || 1)))
+    : 0;
+  // El anillo representa kcal restantes: empieza lleno con la meta del paciente y baja al consumir.
+  const remainingCaloriesRaw = hasEval
+    ? (dashboard?.balance?.remainingCalories ?? dailyTarget - consumedCalories)
+    : 0;
+  const remainingCalories = Number.isFinite(remainingCaloriesRaw) ? remainingCaloriesRaw : 0;
+  const calorieValue = hasEval ? Math.max(0, Math.round(remainingCalories)) : 0;
+  const calorieProgress = hasEval ? Math.max(0, Math.min(1, remainingCalories / (dailyTarget || 1))) : 0;
+  const calorieRingColor = hasEval ? (remainingCalories < 0 ? '#ef4444' : '#1aa44f') : '#d9d4cc';
 
   const macroData = [
     {
       key: 'protein',
       label: 'Proteina',
       percent: hasEval ? (userEval?.distribucion_proteinas_pct ?? 35) : 0,
-      status: hasEval ? (dashboard?.macros?.find(m => m.key === 'protein')?.status ?? 'Medio') : '–',
+      status: hasEval ? deriveMacroStatus(Number(userEval?.distribucion_proteinas_pct ?? 0)) : '–',
       color: hasEval ? '#34c759' : '#d9d4cc',
       icon: '🥩',
     },
@@ -210,7 +288,7 @@ export default function HomeScreen() {
       key: 'carbs',
       label: 'Carbohidratos',
       percent: hasEval ? (userEval?.distribucion_carbohidratos_pct ?? 40) : 0,
-      status: hasEval ? (dashboard?.macros?.find(m => m.key === 'carbs')?.status ?? 'Medio') : '–',
+      status: hasEval ? deriveMacroStatus(Number(userEval?.distribucion_carbohidratos_pct ?? 0)) : '–',
       color: hasEval ? '#ff3b30' : '#d9d4cc',
       icon: '🍞',
     },
@@ -218,7 +296,7 @@ export default function HomeScreen() {
       key: 'fat',
       label: 'Grasas',
       percent: hasEval ? (userEval?.distribucion_grasas_pct ?? 25) : 0,
-      status: hasEval ? (dashboard?.macros?.find(m => m.key === 'fat')?.status ?? 'Medio') : '–',
+      status: hasEval ? deriveMacroStatus(Number(userEval?.distribucion_grasas_pct ?? 0)) : '–',
       color: hasEval ? '#eab308' : '#d9d4cc',
       icon: '🥑',
     },
@@ -308,6 +386,64 @@ export default function HomeScreen() {
                   </Text>
                 </View>
               </View>
+
+              {hasEval && (
+                <View style={styles.calorieBreakdown}>
+                  <View style={styles.calorieBreakdownRow}>
+                    <Text style={styles.calorieBreakdownLabel}>Meta</Text>
+                    <Text style={styles.calorieBreakdownValue}>{dailyTarget} kcal</Text>
+                  </View>
+
+                  <View style={styles.calorieBreakdownRow}>
+                    <Text style={styles.calorieBreakdownLabel}>Plan consumido</Text>
+                    <Text style={styles.calorieBreakdownValue}>{Math.max(0, Math.round(consumedPlanCalories))} kcal</Text>
+                  </View>
+
+                  <View style={styles.calorieBreakdownRow}>
+                    <Text style={styles.calorieBreakdownLabel}>Adicional</Text>
+                    <Text style={styles.calorieBreakdownValue}>{Math.max(0, Math.round(consumedAdditionalCalories))} kcal</Text>
+                  </View>
+
+                  <View style={styles.calorieBreakdownRow}>
+                    <Text style={styles.calorieBreakdownLabel}>Total consumido</Text>
+                    <Text style={[styles.calorieBreakdownValue, exceededCalories > 0 && { color: '#ef4444' }]}>
+                      {Math.max(0, Math.round(totalConsumedCalories))} kcal
+                    </Text>
+                  </View>
+
+                  {consumedAdditionalCalories > 0 && (
+                    <View style={styles.additionalCallout}>
+                      <View style={styles.additionalCalloutHeader}>
+                        <Text style={styles.additionalCalloutTitle}>Adicional</Text>
+                        <Text style={styles.additionalCalloutValue}>{Math.max(0, Math.round(consumedAdditionalCalories))} kcal</Text>
+                      </View>
+                      <View style={styles.additionalCalloutTrack}>
+                        <View
+                          style={[
+                            styles.additionalCalloutFill,
+                            {
+                              width: `${Math.round(additionalProgress * 100)}%`,
+                              backgroundColor: excessColor,
+                            },
+                          ]}
+                        />
+                      </View>
+                    </View>
+                  )}
+
+                  {exceededCalories > 0 && (
+                    <Text style={[styles.calorieExceededText, { color: excessColor }]}>
+                      Exceso: +{Math.round(exceededCalories)} kcal
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              {false && hasEval && (
+                <Text style={[styles.calorieMetaText, consumedCalories > dailyTarget && { color: '#ef4444' }]}>
+                  Meta: {dailyTarget} kcal · Consumidas: {consumedCalories} kcal
+                </Text>
+              )}
 
               {!hasEval && (
                 <View style={styles.lockedBanner}>
@@ -642,6 +778,73 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginTop: 2,
+  },
+  calorieMetaText: {
+    marginTop: 10,
+    color: '#8b8378',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  calorieBreakdown: {
+    marginTop: 10,
+    paddingHorizontal: 4,
+  },
+  calorieBreakdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 3,
+  },
+  calorieBreakdownLabel: {
+    color: '#8b8378',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  calorieBreakdownValue: {
+    color: '#3a352c',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  additionalCallout: {
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: '#fff7ed',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+  },
+  additionalCalloutHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  additionalCalloutTitle: {
+    color: '#7c2d12',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  additionalCalloutValue: {
+    color: '#7c2d12',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  additionalCalloutTrack: {
+    marginTop: 8,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: '#fde68a',
+    overflow: 'hidden',
+  },
+  additionalCalloutFill: {
+    height: 10,
+    borderRadius: 999,
+  },
+  calorieExceededText: {
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   sectionTitle: {
     marginTop: 16,

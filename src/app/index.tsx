@@ -1,8 +1,6 @@
-import { Redirect, type Href } from 'expo-router';
-
-// Pantalla raiz de la app.
-// Este archivo decide a que ruta enviar al usuario cuando abre la aplicacion.
+// Pantalla raíz de la app.
+// La decisión de navegación inicial (sesión/no sesión) la hace `src/app/_layout.tsx`
+// para evitar redirects dobles (flicker y condiciones de carrera).
 export default function Index() {
-  // Redireccion inicial al login.
-  return <Redirect href={'/auth/login' as Href} />;
+  return null;
 }

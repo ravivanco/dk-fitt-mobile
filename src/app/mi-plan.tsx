@@ -1,9 +1,9 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { router } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,18 +13,80 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
+import { BackButton } from '@/components/navigation/back-button';
 import { BottomNav } from '@/components/navigation/bottom-nav';
-import { loadCalorieDashboard } from '@/services/calorie.service';
 import {
   DayKey,
-  ExercisePlan,
   PlanDay,
-  PlanMeal,
   WeeklyPlan,
+  DishDetails,
+  TodayMealPlan,
+  TodayMealDay,
+  TodayMealItem,
+  loadDishDetails,
+  loadTodayMealPlanFromActivePlan,
+  loadTodayMealPlan,
   loadWeeklyPlan,
-  updateExerciseStatus,
-  updateMealStatus,
+  saveMealTracking,
 } from '@/services/plan.service';
+import { refreshCalorieControlDashboard } from '@/store/calorie-control-dashboard.store';
+import { fetchExerciseTrackingToday, postExerciseTracking, type ExerciseTrackingItem } from '@/services/exercise.service';
+import { fetchActiveNutritionPlan } from '@/services/nutrition-plan.service';
+
+function formatLocalIsoDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatLocalTimeHHmm(date = new Date()) {
+  const hours = `${date.getHours()}`.padStart(2, '0');
+  const minutes = `${date.getMinutes()}`.padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function normalizeTrackingStatus(input?: string) {
+  const normalized = (input ?? '').toLowerCase();
+  if (
+    normalized === 'done' ||
+    normalized === 'realizado' ||
+    normalized === 'realizada' ||
+    normalized === 'completado' ||
+    normalized === 'completada' ||
+    normalized === 'true'
+  ) return 'done' as const;
+  if (
+    normalized === 'skip' ||
+    normalized === 'no_realizado' ||
+    normalized === 'no realizada' ||
+    normalized === 'no_completado' ||
+    normalized === 'no completado'
+  ) return 'skip' as const;
+  return null;
+}
+
+function normalizeExerciseTrackingStatus(item: ExerciseTrackingItem): 'done' | 'skip' | null {
+  // Regla: si el backend devuelve `completado` pero sin `hora_registro`, lo tratamos como pendiente (null).
+  // - completado === true => done
+  // - completado === false + hora_registro => skip (marcado con X)
+  // - completado === false + sin hora_registro => pendiente
+  if (typeof (item as any).completado === 'boolean') {
+    if ((item as any).completado === true) return 'done';
+    const hasTime = typeof (item as any).hora_registro === 'string' && (item as any).hora_registro.trim().length > 0;
+    return hasTime ? 'skip' : null;
+  }
+
+  const raw = typeof item.status === 'string' ? item.status : typeof item.estado === 'string' ? item.estado : undefined;
+  return normalizeTrackingStatus(raw);
+}
+
+function intensityBadge(intensity?: string) {
+  const normalized = (intensity ?? '').toLowerCase();
+  if (normalized.includes('alta')) return { label: 'Alta', color: '#dc2626', bg: '#fee2e2' };
+  if (normalized.includes('media')) return { label: 'Media', color: '#f97316', bg: '#ffedd5' };
+  return { label: 'Baja', color: '#16a34a', bg: '#dcfce7' };
+}
 
 // ─── Calendar helpers ────────────────────────────────────────────────────────
 
@@ -126,18 +188,27 @@ function WeekCalendar({
 function DualActionButtons({
   value,
   onChange,
+  disabled,
 }: {
   value: 'done' | 'skip' | null;
   onChange: (next: 'done' | 'skip' | null) => void;
+  disabled?: boolean;
 }) {
-  const handleDone = () => onChange(value === 'done' ? null : 'done');
-  const handleSkip = () => onChange(value === 'skip' ? null : 'skip');
+  const handleDone = () => {
+    if (disabled) return;
+    onChange(value === 'done' ? null : 'done');
+  };
+  const handleSkip = () => {
+    if (disabled) return;
+    onChange(value === 'skip' ? null : 'skip');
+  };
 
   return (
-    <View style={styles.dualBtns}>
+    <View style={[styles.dualBtns, disabled && { opacity: 0.45 }]}>
       <TouchableOpacity
         style={[styles.dualBtn, styles.dualBtnCheck, value === 'done' && styles.dualBtnCheckActive]}
         onPress={handleDone}
+        disabled={disabled}
         hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
         activeOpacity={0.75}
       >
@@ -146,12 +217,107 @@ function DualActionButtons({
       <TouchableOpacity
         style={[styles.dualBtn, styles.dualBtnSkip, value === 'skip' && styles.dualBtnSkipActive]}
         onPress={handleSkip}
+        disabled={disabled}
         hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
         activeOpacity={0.75}
       >
         <MaterialCommunityIcons name="close" size={17} color={value === 'skip' ? '#ffffff' : '#ef4444'} />
       </TouchableOpacity>
     </View>
+  );
+}
+
+function statusToLabel(status: TodayMealItem['status']) {
+  if (status === 'done') return 'Realizada';
+  if (status === 'skip') return 'No realizada';
+  return 'Pendiente';
+}
+
+function applyMealStatusOptimistic(
+  plan: TodayMealPlan | null,
+  menuTrackingId: string,
+  next: 'done' | 'skip',
+): TodayMealPlan | null {
+  if (!plan) return plan;
+
+  const patchMeals = (meals: TodayMealItem[]) => meals.map((meal) => (
+    meal.menuTrackingId === menuTrackingId
+      ? { ...meal, status: next }
+      : meal
+  ));
+
+  const nextMeals = patchMeals(plan.meals);
+  const nextDays = plan.days.map((day) => {
+    const patched = patchMeals(day.meals);
+    const completed = patched.filter((meal) => meal.status === 'done').length;
+    const total = patched.length;
+    return {
+      ...day,
+      meals: patched,
+      completedMeals: completed,
+      totalMeals: total,
+      progressPct: total > 0 ? Math.round((completed / total) * 100) : 0,
+    };
+  });
+
+  const completedMeals = nextMeals.filter((meal) => meal.status === 'done').length;
+  const totalMeals = nextMeals.length;
+  return {
+    ...plan,
+    days: nextDays,
+    meals: nextMeals,
+    completedMeals,
+    totalMeals,
+    progressPct: totalMeals > 0 ? Math.round((completedMeals / totalMeals) * 100) : 0,
+  };
+}
+
+function MealDayStrip({
+  days,
+  selectedDayId,
+  onSelectDay,
+}: {
+  days: TodayMealDay[];
+  selectedDayId: string;
+  onSelectDay: (dayId: string) => void;
+}) {
+  const scrollRef = React.useRef<ScrollView>(null);
+
+  React.useEffect(() => {
+    if (!selectedDayId || days.length === 0) return;
+    const index = days.findIndex((day) => day.id === selectedDayId);
+    if (index < 0) return;
+
+    // Cada card mide ~74px + gap 10 => 84px por item (ver styles.mealDayCard + styles.mealDayContent).
+    const itemWidth = 84;
+    const targetX = Math.max(0, index * itemWidth - itemWidth * 2);
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ x: targetX, animated: true });
+    });
+  }, [days, selectedDayId]);
+
+  return (
+    <ScrollView
+      ref={scrollRef}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.mealDayContent}
+      style={styles.mealDayRow}
+    >
+      {days.map((day, index) => {
+        const active = day.id === selectedDayId;
+        return (
+          <TouchableOpacity key={`${day.id}:${day.date ?? ''}:${index}`} activeOpacity={0.8} onPress={() => onSelectDay(day.id)}>
+            <View style={[styles.mealDayCard, active && styles.mealDayCardActive]}>
+              <Text style={[styles.mealDayLabel, active && styles.mealDayLabelActive]}>{day.shortLabel}</Text>
+              <Text style={[styles.mealDayDate, active && styles.mealDayDateActive]}>{day.date ? new Date(`${day.date}T00:00:00`).getDate() : '--'}</Text>
+              <Text style={[styles.mealDayMeta, active && styles.mealDayMetaActive]}>{day.progressPct}%</Text>
+              <Text style={[styles.mealDaySubtext, active && styles.mealDaySubtextActive]}>{day.label}</Text>
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
   );
 }
 
@@ -163,13 +329,27 @@ function MealCard({
   expanded,
   onToggleExpand,
   onChange,
+  details,
+  loadingDetails,
+  detailsError,
+  actionsDisabled,
 }: {
-  meal: PlanMeal;
+  meal: TodayMealItem;
   status: 'done' | 'skip' | null;
   expanded: boolean;
   onToggleExpand: () => void;
   onChange: (next: 'done' | 'skip' | null) => void;
+  details?: DishDetails | null;
+  loadingDetails?: boolean;
+  detailsError?: string | null;
+  actionsDisabled?: boolean;
 }) {
+  const visibleIngredients = details?.ingredients ?? [];
+  const visiblePreparation = details?.preparation ?? [];
+  const detailTitle = details?.title ?? meal.title;
+  const detailCalories = details?.calories ?? meal.calories;
+  const detailEmoji = details?.emoji ?? meal.emoji;
+
   return (
     <View style={[styles.mealCard, status === 'done' && styles.mealCardDone, status === 'skip' && styles.mealCardSkip]}>
       {/* ── Header Row ── */}
@@ -184,14 +364,16 @@ function MealCard({
           <Text style={[styles.mealTitle, status === 'skip' && styles.mealTitleSkip]} numberOfLines={2}>
             {meal.title}
           </Text>
-          <Text style={styles.mealSubtext} numberOfLines={1}>{meal.slot}</Text>
+          <Text style={styles.mealSubtext} numberOfLines={1}>
+            {meal.slot} · {statusToLabel(status ? status : 'pending')}
+          </Text>
         </View>
 
         {/* Right: kcal + dual buttons */}
         <View style={styles.mealRight}>
           <Text style={[styles.mealKcal, status === 'skip' && { color: '#b5aba0' }]}>{meal.calories}</Text>
           <Text style={[styles.mealKcalUnit, status === 'skip' && { color: '#c8c2ba' }]}>kcal</Text>
-          <DualActionButtons value={status} onChange={onChange} />
+          <DualActionButtons value={status} onChange={onChange} disabled={actionsDisabled} />
         </View>
       </View>
 
@@ -204,20 +386,34 @@ function MealCard({
       {/* ── Expanded detail: card hero style ── */}
       {expanded && (
         <View style={styles.detailBox}>
+          {loadingDetails ? (
+            <View style={styles.detailLoadingBox}>
+              <ActivityIndicator size="small" color="#1aa44f" />
+              <Text style={styles.detailLoadingText}>Cargando receta...</Text>
+            </View>
+          ) : null}
+
+          {!loadingDetails && !details && detailsError ? (
+            <View style={styles.detailErrorBox}>
+              <MaterialCommunityIcons name="alert-circle-outline" size={16} color="#ef4444" />
+              <Text style={styles.detailErrorText}>No pudimos cargar ingredientes y preparaciÃ³n.</Text>
+            </View>
+          ) : null}
+
           {/* Hero card with large emoji + meal info */}
           <View style={styles.detailHero}>
             <View style={styles.detailHeroImage}>
-              <Text style={styles.detailHeroEmoji}>{meal.emoji}</Text>
+              <Text style={styles.detailHeroEmoji}>{detailEmoji}</Text>
             </View>
             <View style={styles.detailHeroBody}>
               <View style={styles.detailHeroTag}>
                 <View style={styles.detailHeroTagDot} />
                 <Text style={styles.detailHeroTagText}>{meal.slot.toUpperCase()}</Text>
               </View>
-              <Text style={styles.detailHeroTitle}>{meal.title}</Text>
+              <Text style={styles.detailHeroTitle}>{detailTitle}</Text>
               <View style={styles.detailHeroMeta}>
                 <MaterialCommunityIcons name="fire" size={12} color="#f5a623" />
-                <Text style={styles.detailHeroMetaText}>{meal.calories} kcal</Text>
+                <Text style={styles.detailHeroMetaText}>{detailCalories} kcal</Text>
                 <View style={styles.detailHeroMetaDivider} />
                 <MaterialCommunityIcons name="silverware-fork-knife" size={12} color="#9a9083" />
                 <Text style={styles.detailHeroMetaText}>Comida</Text>
@@ -225,21 +421,15 @@ function MealCard({
             </View>
           </View>
 
-          {/* Macro chips */}
-          <View style={styles.macroInfo}>
-            <View style={styles.macroInfoChip}>
-              <Text style={styles.macroInfoLabel}>Carbos</Text>
-              <Text style={[styles.macroInfoValue, { color: '#ef4444' }]}>{meal.macroImpact.carbs * 10}g</Text>
+          {details?.recipe ? (
+            <View style={styles.recipeBox}>
+              <View style={styles.detailSectionHeader}>
+                <MaterialCommunityIcons name="file-document-outline" size={15} color="#f5a623" />
+                <Text style={styles.detailSectionTitle}>Receta</Text>
+              </View>
+              <Text style={styles.recipeText}>{details.recipe}</Text>
             </View>
-            <View style={styles.macroInfoChip}>
-              <Text style={styles.macroInfoLabel}>Proteína</Text>
-              <Text style={[styles.macroInfoValue, { color: '#1aa44f' }]}>{meal.macroImpact.protein * 10}g</Text>
-            </View>
-            <View style={styles.macroInfoChip}>
-              <Text style={styles.macroInfoLabel}>Grasas</Text>
-              <Text style={[styles.macroInfoValue, { color: '#eab308' }]}>{meal.macroImpact.fat * 10}g</Text>
-            </View>
-          </View>
+          ) : null}
 
           {/* Ingredients list  */}
           <View style={styles.detailSection}>
@@ -247,14 +437,16 @@ function MealCard({
               <MaterialCommunityIcons name="basket-outline" size={15} color="#1aa44f" />
               <Text style={styles.detailSectionTitle}>Ingredientes</Text>
             </View>
-            {meal.ingredients.map((ing, idx) => (
+            {visibleIngredients.length > 0 ? visibleIngredients.map((ing, idx) => (
               <View key={idx} style={styles.ingredientRow}>
                 <View style={styles.ingredientIconWrap}>
                   <MaterialCommunityIcons name="circle-small" size={18} color="#9a9083" />
                 </View>
                 <Text style={styles.ingredientText}>{ing}</Text>
               </View>
-            ))}
+            )) : (
+              <Text style={styles.detailPlaceholderText}>No hay ingredientes disponibles todavía.</Text>
+            )}
           </View>
 
           {/* Preparation steps */}
@@ -263,7 +455,7 @@ function MealCard({
               <MaterialCommunityIcons name="chef-hat" size={15} color="#f5a623" />
               <Text style={styles.detailSectionTitle}>Modo de Preparación</Text>
             </View>
-            {meal.preparation.map((step, idx) => (
+            {visiblePreparation.length > 0 ? visiblePreparation.map((step, idx) => (
               <View key={idx} style={styles.prepRow}>
                 <View style={[styles.prepNumber, idx === 0 && styles.prepNumberActive]}>
                   <Text style={styles.prepNumberText}>{idx + 1}</Text>
@@ -272,7 +464,9 @@ function MealCard({
                   <Text style={styles.prepText}>{step}</Text>
                 </View>
               </View>
-            ))}
+            )) : (
+              <Text style={styles.detailPlaceholderText}>No hay pasos de preparación disponibles todavía.</Text>
+            )}
           </View>
         </View>
       )}
@@ -287,36 +481,43 @@ function ExerciseCard({
   exercise,
   status,
   onChange,
+  actionsDisabled,
 }: {
-  exercise: ExercisePlan;
+  exercise: ExerciseTrackingItem;
   status: 'done' | 'skip' | null;
   onChange: (next: 'done' | 'skip' | null) => void;
+  actionsDisabled?: boolean;
 }) {
+  const badge = intensityBadge(typeof exercise.intensidad === 'string' ? exercise.intensidad : undefined);
+
   return (
     <View style={[styles.exerciseCard, status === 'done' && styles.exerciseCardDone]}>
       <View style={styles.exerciseHeader}>
         <View style={[styles.exerciseAvatar, status === 'done' && styles.exerciseAvatarDone]}>
-          <Text style={styles.exerciseEmoji}>{exercise.emoji}</Text>
+          <Text style={styles.exerciseEmoji}>🏋️</Text>
         </View>
         <View style={styles.exerciseInfo}>
-          <Text style={styles.exerciseTitle}>{exercise.title}</Text>
+          <Text style={styles.exerciseTitle}>{exercise.nombre}</Text>
           <View style={styles.exerciseBadges}>
             <View style={styles.exerciseBadge}>
               <MaterialCommunityIcons name="clock-outline" size={10} color="#8e8579" />
-              <Text style={styles.exerciseBadgeText}>{exercise.duration}</Text>
+              <Text style={styles.exerciseBadgeText}>{typeof exercise.duracion_min === 'number' ? `${exercise.duracion_min} min` : '—'}</Text>
             </View>
             <View style={styles.exerciseBadge}>
               <MaterialCommunityIcons name="repeat" size={10} color="#8e8579" />
-              <Text style={styles.exerciseBadgeText}>{exercise.series}</Text>
+              <Text style={styles.exerciseBadgeText}>{exercise.series ?? exercise.bloques ?? '—'}</Text>
             </View>
             <View style={styles.exerciseBadge}>
               <MaterialCommunityIcons name="numeric" size={10} color="#8e8579" />
-              <Text style={styles.exerciseBadgeText}>{exercise.repetitions}</Text>
+              <Text style={styles.exerciseBadgeText}>{exercise.repeticiones ?? exercise.distancia ?? '—'}</Text>
+            </View>
+            <View style={[styles.exerciseBadge, { backgroundColor: badge.bg }]}>
+              <Text style={[styles.exerciseBadgeText, { color: badge.color }]}>{badge.label}</Text>
             </View>
           </View>
-          {exercise.notes !== '' && <Text style={styles.exerciseNotes}>{exercise.notes}</Text>}
+          {!!exercise.descripcion && <Text style={styles.exerciseNotes}>{exercise.descripcion}</Text>}
         </View>
-        <DualActionButtons value={status} onChange={onChange} />
+        <DualActionButtons value={status} onChange={onChange} disabled={actionsDisabled ?? status !== null} />
       </View>
     </View>
   );
@@ -328,27 +529,89 @@ type TabKey = 'menu' | 'ejercicios';
 
 export default function MiPlanScreen() {
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan | null>(null);
+  const [todayPlan, setTodayPlan] = useState<TodayMealPlan | null>(null);
+  const [activePlanId, setActivePlanId] = useState<string | number | null>(null);
+  const [selectedMealDayId, setSelectedMealDayId] = useState<string>('');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeDayKey, setActiveDayKey] = useState<DayKey>('monday');
   const [activeTab, setActiveTab] = useState<TabKey>('menu');
   const [loading, setLoading] = useState(true);
+  const [loadingExercises, setLoadingExercises] = useState(false);
+  const [exerciseTracking, setExerciseTracking] = useState<ExerciseTrackingItem[]>([]);
+  const [exerciseStatuses, setExerciseStatuses] = useState<Record<string, 'done' | 'skip' | null>>({});
+  const [exerciseTotalMinutes, setExerciseTotalMinutes] = useState<number>(0);
+  const [exerciseEmptyMessage, setExerciseEmptyMessage] = useState<string | null>(null);
   const [expandedMealIds, setExpandedMealIds] = useState<string[]>([]);
-  const [totalKcal, setTotalKcal] = useState<number>(0);
+  const [mealDetailsById, setMealDetailsById] = useState<Record<string, DishDetails>>({});
+  const [loadingDishIds, setLoadingDishIds] = useState<Record<string, boolean>>({});
+  const [dishLoadErrors, setDishLoadErrors] = useState<Record<string, string>>({});
+  const [mealStatusOverrides, setMealStatusOverrides] = useState<Record<string, 'done' | 'skip' | null>>({});
+  const [mealSavingByTrackingId, setMealSavingByTrackingId] = useState<Record<string, boolean>>({});
   const hasInitializedDayRef = React.useRef(false);
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const [nextPlan, nextDashboard] = await Promise.all([loadWeeklyPlan(), loadCalorieDashboard()]);
-      setWeeklyPlan(nextPlan);
-      setActiveDayKey((prev) => {
-        if (hasInitializedDayRef.current && nextPlan.days.some((day) => day.key === prev)) {
-          return prev;
-        }
+      const activePlan = await fetchActiveNutritionPlan();
+      if (!activePlan || activePlan.modulo_habilitado !== true) {
+        setWeeklyPlan(null);
+        setTodayPlan(null);
+        setActivePlanId(null);
+        setLoadError('Tu plan aún no está disponible. Espera a que tu nutricionista lo active.');
+        return;
+      }
 
-        return nextPlan.activeDayKey;
-      });
-      hasInitializedDayRef.current = true;
-      setTotalKcal(nextDashboard?.dailyTarget ?? nextPlan.days[0]?.targetCalories ?? 1800);
+      setActivePlanId(activePlan.id_plan);
+
+      const [weeklyResult, mealResult] = await Promise.allSettled([
+        loadWeeklyPlan(),
+        loadTodayMealPlanFromActivePlan(),
+      ]);
+
+      if (weeklyResult.status === 'fulfilled') {
+        const nextPlan = weeklyResult.value;
+        setWeeklyPlan(nextPlan);
+        setActiveDayKey((prev) => {
+          if (hasInitializedDayRef.current && nextPlan.days.some((day) => day.key === prev)) {
+            return prev;
+          }
+
+          return nextPlan.activeDayKey;
+        });
+        hasInitializedDayRef.current = true;
+      } else {
+        setLoadError('No pudimos cargar tu plan semanal.');
+      }
+
+      if (mealResult.status === 'fulfilled') {
+        setTodayPlan(mealResult.value);
+        setSelectedMealDayId(mealResult.value.selectedDayId);
+        // selectedMealDayId define la fecha a consultar; no usamos un calendario extra en esta pantalla.
+      } else {
+        // Fallback: si falla el endpoint nuevo de weeks, mantener la experiencia previa
+        // cargando el menÃº del dÃ­a desde meal-tracking/today.
+        try {
+          const fallback = await loadTodayMealPlan();
+          setTodayPlan(fallback);
+          setSelectedMealDayId(fallback.selectedDayId);
+          // selectedMealDayId define la fecha a consultar; no usamos un calendario extra en esta pantalla.
+          setLoadError((current) => current ?? 'No pudimos cargar el plan completo; mostrando el menÃº del dÃ­a.');
+        } catch {
+          setTodayPlan({
+            days: [],
+            selectedDayId: '',
+            meals: [],
+            completedMeals: 0,
+            totalMeals: 0,
+            progressPct: 0,
+            summary: [],
+            updatedAt: undefined,
+          });
+          setSelectedMealDayId('');
+          setLoadError((current) => current ?? 'No pudimos cargar las comidas de hoy.');
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -365,11 +628,204 @@ export default function MiPlanScreen() {
     return weeklyPlan.days.find((day) => day.key === activeDayKey) ?? weeklyPlan.days[0] ?? null;
   }, [activeDayKey, weeklyPlan]);
 
+  const selectedMealDay = useMemo<TodayMealDay | null>(() => {
+    if (!todayPlan) return null;
+    return (
+      todayPlan.days.find((day) => day.id === selectedMealDayId)
+      ?? todayPlan.days.find((day) => day.id === todayPlan.selectedDayId)
+      ?? todayPlan.days[0]
+      ?? null
+    );
+  }, [selectedMealDayId, todayPlan]);
+
+  const selectedDate = useMemo(() => {
+    const date = selectedMealDay?.date;
+    return typeof date === 'string' && date.length >= 10 ? date.slice(0, 10) : formatLocalIsoDate();
+  }, [selectedMealDay]);
+
+  const isTodaySelected = selectedDate === formatLocalIsoDate();
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (activeTab !== 'ejercicios') return;
+      let active = true;
+
+      const loadExercises = async () => {
+        setLoadingExercises(true);
+        try {
+          const result = await fetchExerciseTrackingToday({ date: selectedDate });
+          if (!active) return;
+          setExerciseTracking(result.items);
+          setExerciseTotalMinutes(result.totalDurationMin);
+          setExerciseEmptyMessage(result.message ?? null);
+          setExerciseStatuses(
+            result.items.reduce<Record<string, 'done' | 'skip' | null>>((acc, ex) => {
+              acc[ex.id] = normalizeExerciseTrackingStatus(ex);
+              return acc;
+            }, {}),
+          );
+        } catch {
+          if (active) {
+            setExerciseTracking([]);
+            setExerciseStatuses({});
+            setExerciseTotalMinutes(0);
+            setExerciseEmptyMessage(null);
+          }
+        } finally {
+          if (active) setLoadingExercises(false);
+        }
+      };
+
+      void loadExercises();
+      return () => {
+        active = false;
+      };
+    }, [activeTab, selectedDate]),
+  );
+
   const toggleMealExpand = (mealId: string) => {
     setExpandedMealIds((prev) =>
       prev.includes(mealId) ? prev.filter((id) => id !== mealId) : [...prev, mealId],
     );
   };
+
+  const handleMealExpand = React.useCallback(async (meal: TodayMealItem) => {
+    const isExpanded = expandedMealIds.includes(meal.id);
+
+    if (__DEV__) {
+      console.log('[mi-plan][expand] toggle', {
+        mealId: meal.id,
+        menuTrackingId: meal.menuTrackingId,
+        dishId: meal.dishId,
+        isExpanded,
+        hasCachedDetails: Boolean(meal.dishId && mealDetailsById[meal.dishId]),
+      });
+    }
+
+    if (!isExpanded && meal.dishId && !mealDetailsById[meal.dishId] && !loadingDishIds[meal.dishId]) {
+      setLoadingDishIds((current) => ({ ...current, [meal.dishId!]: true }));
+      setDishLoadErrors((current) => {
+        const next = { ...current };
+        delete next[meal.dishId!];
+        return next;
+      });
+      try {
+        if (__DEV__) console.log('[mi-plan][expand] fetching dish details', { dishId: meal.dishId });
+        const details = await loadDishDetails(meal.dishId);
+        if (__DEV__) {
+          console.log('[mi-plan][expand] fetched dish details', {
+            dishId: meal.dishId,
+            ingredientsCount: details.ingredients.length,
+            preparationCount: details.preparation.length,
+          });
+        }
+        setMealDetailsById((current) => ({ ...current, [meal.dishId!]: details }));
+      } catch (err) {
+        const message = err instanceof Error && err.message ? err.message : 'Error cargando receta';
+        if (__DEV__) console.log('[mi-plan][expand] fetch error', { dishId: meal.dishId, message });
+        setDishLoadErrors((current) => ({ ...current, [meal.dishId!]: message }));
+      } finally {
+        setLoadingDishIds((current) => {
+          const next = { ...current };
+          delete next[meal.dishId!];
+          return next;
+        });
+      }
+    }
+
+    toggleMealExpand(meal.id);
+  }, [expandedMealIds, mealDetailsById, loadingDishIds]);
+
+  const handleMealStatusChange = React.useCallback(async (meal: TodayMealItem, next: 'done' | 'skip' | null) => {
+    if (!next || meal.status === next) return;
+    if (!isTodaySelected) return;
+    if (!activePlanId) return;
+    const trackingKey = String(meal.menuTrackingId);
+
+    setMealSavingByTrackingId((prev) => ({ ...prev, [trackingKey]: true }));
+    setMealStatusOverrides((prev) => ({ ...prev, [trackingKey]: next }));
+    setTodayPlan((current) => applyMealStatusOptimistic(current, trackingKey, next));
+
+    try {
+      if (__DEV__) {
+        console.log('[mi-plan][meal][status] change', {
+          mealId: meal.id,
+          menuTrackingId: meal.menuTrackingId,
+          current: meal.status,
+          next,
+          activePlanId,
+        });
+      }
+      const updated = await saveMealTracking({
+        menuTrackingId: meal.menuTrackingId,
+        realized: next === 'done',
+        hora_registro: formatLocalTimeHHmm(),
+        planId: activePlanId,
+      });
+      setTodayPlan(updated);
+      setSelectedMealDayId(updated.selectedDayId);
+      // Refrescar dashboard calÃ³rico del dÃ­a para actualizar el anillo en Home.
+      void refreshCalorieControlDashboard(formatLocalIsoDate()).catch((err) => {
+        if (__DEV__) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log('[mi-plan][meal][status] refresh dashboard failed', { message });
+        }
+      });
+    } catch (err) {
+      setMealStatusOverrides((prev) => {
+        const copy = { ...prev };
+        delete copy[trackingKey];
+        return copy;
+      });
+      if (__DEV__) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log('[mi-plan][meal][status] change failed', {
+          mealId: meal.id,
+          menuTrackingId: meal.menuTrackingId,
+          next,
+          message,
+        });
+      }
+      Alert.alert('Error', 'No pudimos actualizar el estado de la comida.');
+    } finally {
+      setMealSavingByTrackingId((prev) => {
+        const copy = { ...prev };
+        delete copy[trackingKey];
+        return copy;
+      });
+    }
+  }, [activePlanId, isTodaySelected]);
+
+  const handleExerciseStatusChange = React.useCallback(
+    async (exercise: ExerciseTrackingItem, next: 'done' | 'skip' | null) => {
+      if (!next) return;
+      const current = exerciseStatuses[exercise.id] ?? null;
+      if (current === next) return;
+
+      try {
+        // Optimista: marcar y bloquear de inmediato.
+        setExerciseStatuses((prev) => ({ ...prev, [exercise.id]: next }));
+        await postExerciseTracking(
+          exercise.dailyId
+            ? {
+                id_ejercicio_diario: exercise.dailyId,
+                completado: next === 'done',
+                hora_registro: formatLocalTimeHHmm(),
+              }
+            : {
+                id_ejercicio: exercise.id,
+                fecha: selectedDate,
+                completado: next === 'done',
+                hora_registro: formatLocalTimeHHmm(),
+              },
+        );
+      } catch {
+        setExerciseStatuses((prev) => ({ ...prev, [exercise.id]: current }));
+        Alert.alert('Error', 'No pudimos registrar el ejercicio.');
+      }
+    },
+    [exerciseStatuses, selectedDate],
+  );
 
   const refreshAfterPlanUpdate = async (promise: Promise<WeeklyPlan>) => {
     const next = await promise;
@@ -377,12 +833,32 @@ export default function MiPlanScreen() {
   };
 
   // ── Loading state ──
-  if (loading || !weeklyPlan || !activeDay) {
+  const todayMeals = selectedMealDay?.meals ?? todayPlan?.meals ?? [];
+  const todayMealsCompleted = selectedMealDay?.completedMeals ?? todayPlan?.completedMeals ?? 0;
+  const todayMealsTotal = selectedMealDay?.totalMeals ?? todayPlan?.totalMeals ?? 0;
+  const todayProgressPct = selectedMealDay?.progressPct ?? todayPlan?.progressPct ?? 0;
+
+  if (loading) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top']}>
         <View style={styles.loadingWrapper}>
           <ActivityIndicator size="large" color="#1aa44f" />
           <Text style={styles.loadingText}>Preparando tu plan...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!weeklyPlan || !activeDay) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.loadingWrapper}>
+          <Text style={styles.emptyEmoji}>⚠️</Text>
+          <Text style={styles.emptyTitle}>No se pudo cargar Mi Plan</Text>
+          <Text style={styles.emptySubtext}>{loadError ?? 'Intenta nuevamente en unos segundos.'}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => void loadData()} activeOpacity={0.8}>
+            <Text style={styles.retryButtonText}>Reintentar</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
@@ -403,9 +879,7 @@ export default function MiPlanScreen() {
 
           {/* ── Header ── */}
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <MaterialCommunityIcons name="arrow-left" size={22} color="#0f1115" />
-            </TouchableOpacity>
+            <BackButton />
             <Text style={styles.headerTitle}>Mi Plan</Text>
             <View style={styles.headerAvatar}>
               <MaterialCommunityIcons name="account-circle-outline" size={28} color="#8e8579" />
@@ -437,50 +911,82 @@ export default function MiPlanScreen() {
           </View>
 
           {/* ── Week Calendar ── */}
-          <View style={styles.calendarWrap}>
-            <WeekCalendar
-              activeDayKey={activeDayKey}
-              onSelectDay={setActiveDayKey}
-              weeklyPlan={weeklyPlan}
-            />
-          </View>
+          {/* (Calendario general removido; se usa el calendario del plan dentro de Menú) */}
 
           {/* ── NUTRITION TAB ── */}
           {activeTab === 'menu' && (
             <>
+              {todayPlan && todayPlan.days.length > 0 && selectedMealDay && (
+                <MealDayStrip
+                  days={todayPlan.days}
+                  selectedDayId={selectedMealDay.id}
+                  onSelectDay={setSelectedMealDayId}
+                />
+              )}
+
               {/* Day summary header */}
               <View style={styles.daySummaryRow}>
                 <View>
-                  <Text style={styles.daySummaryLabel}>NUTRICIÓN DIARIA</Text>
-                  <Text style={styles.daySummaryTitle}>Comidas de Hoy</Text>
+                  <Text style={styles.daySummaryLabel}>MENÚ DE HOY</Text>
+                  <Text style={styles.daySummaryTitle}>{selectedMealDay?.label ?? 'Sin comidas asignadas'}</Text>
                 </View>
                 <View style={styles.kcalBadge}>
-                  <Text style={styles.kcalValue}>{activeDay.selectedMenu.totalCalories.toLocaleString()}</Text>
-                  <Text style={styles.kcalUnit}>kcal totales</Text>
+                  <Text style={styles.kcalValue}>{todayProgressPct}%</Text>
+                  <Text style={styles.kcalUnit}>{todayMealsCompleted}/{todayMealsTotal} comidas</Text>
                 </View>
               </View>
+
+              {Array.isArray(todayPlan?.summary) && todayPlan.summary.length > 0 && (
+                <View style={styles.summaryBox}>
+                  {todayPlan.summary.map((line: string, index: number) => (
+                    <Text key={`${line}-${index}`} style={styles.summaryLine}>{line}</Text>
+                  ))}
+                </View>
+              )}
 
               {/* Progress strip */}
               <View style={styles.progressWrap}>
                 <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+                  <View style={[styles.progressFill, { width: `${todayProgressPct}%` }]} />
                 </View>
-                <Text style={styles.progressLabel}>{completedMeals}/{totalMeals} comidas completadas</Text>
+                <Text style={styles.progressLabel}>{todayMealsCompleted}/{todayMealsTotal} comidas completadas</Text>
               </View>
 
               {/* Meal list */}
-              <View style={styles.mealList}>
-                {activeDay.selectedMenu.meals.map((meal) => (
-                  <MealCard
-                    key={meal.id}
-                    meal={meal}
-                    status={activeDay.mealStatuses[meal.id]}
-                    expanded={expandedMealIds.includes(meal.id)}
-                    onToggleExpand={() => toggleMealExpand(meal.id)}
-                    onChange={(next) => void refreshAfterPlanUpdate(updateMealStatus(meal, next ?? 'skip'))}
-                  />
-                ))}
-              </View>
+              {todayMeals.length > 0 ? (
+                <View style={styles.mealList}>
+                  {todayMeals.map((meal) => {
+                    const trackingKey = String(meal.menuTrackingId);
+                    const override = mealStatusOverrides[trackingKey];
+                    const effectiveStatus = override ?? (meal.status === 'pending' ? null : meal.status);
+                    const isSaving = Boolean(mealSavingByTrackingId[trackingKey]);
+
+                    return (
+                      <MealCard
+                        key={meal.id}
+                        meal={meal}
+                        status={effectiveStatus}
+                        expanded={expandedMealIds.includes(meal.id)}
+                        onToggleExpand={() => void handleMealExpand(meal)}
+                        onChange={(next) => void handleMealStatusChange(meal, next)}
+                        actionsDisabled={!isTodaySelected || effectiveStatus !== null || isSaving}
+                        details={meal.dishId ? mealDetailsById[meal.dishId] : undefined}
+                        loadingDetails={meal.dishId ? Boolean(loadingDishIds[meal.dishId]) : false}
+                        detailsError={meal.dishId ? (dishLoadErrors[meal.dishId] ?? null) : null}
+                      />
+                    );
+                  })}
+                </View>
+              ) : (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyEmoji}>🍽️</Text>
+                  <Text style={styles.emptyTitle}>No hay comidas para mostrar</Text>
+                  <Text style={styles.emptySubtext}>{loadError ?? 'Todavía no hay menús asignados para este día.'}</Text>
+                  <TouchableOpacity style={styles.retryButton} onPress={() => void loadData()} activeOpacity={0.8}>
+                    <Text style={styles.retryButtonText}>Recargar</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </>
           )}
 
@@ -490,33 +996,39 @@ export default function MiPlanScreen() {
               <View style={styles.daySummaryRow}>
                 <View>
                   <Text style={styles.daySummaryLabel}>RUTINA SUGERIDA</Text>
-                  <Text style={styles.daySummaryTitle}>Ejercicios del Día</Text>
+                  <Text style={styles.daySummaryTitle}>{selectedMealDay?.label ?? 'Ejercicios del día'}</Text>
                 </View>
                 <View style={[styles.kcalBadge, { backgroundColor: '#eef6ff' }]}>
-                  <Text style={[styles.kcalValue, { color: '#2563eb' }]}>{activeDay.exercises.length}</Text>
-                  <Text style={[styles.kcalUnit, { color: '#6ea9f0' }]}>ejercicios</Text>
+                  <Text style={[styles.kcalValue, { color: '#2563eb' }]}>{exerciseTotalMinutes}</Text>
+                  <Text style={[styles.kcalUnit, { color: '#6ea9f0' }]}>min</Text>
                 </View>
               </View>
 
               <View style={styles.exerciseList}>
-                {activeDay.exercises.map((exercise) => (
-                  <ExerciseCard
-                    key={exercise.id}
-                    exercise={exercise}
-                    status={activeDay.exerciseStatuses[exercise.id]}
-                    onChange={(next) =>
-                      void refreshAfterPlanUpdate(updateExerciseStatus(exercise.id, next ?? 'skip'))
-                    }
-                  />
-                ))}
+                {loadingExercises ? (
+                  <View style={styles.loadingWrapper}>
+                    <ActivityIndicator size="large" color="#1aa44f" />
+                    <Text style={styles.loadingText}>Cargando ejercicios...</Text>
+                  </View>
+                ) : (
+                  exerciseTracking.map((exercise) => (
+                    <ExerciseCard
+                      key={exercise.id}
+                      exercise={exercise}
+                      status={exerciseStatuses[exercise.id] ?? null}
+                      onChange={(next) => void handleExerciseStatusChange(exercise, next)}
+                      actionsDisabled={!isTodaySelected || (exerciseStatuses[exercise.id] ?? null) !== null}
+                    />
+                  ))
+                )}
               </View>
 
               {/* Empty state for weekend */}
-              {activeDay.exercises.length === 0 && (
+              {!loadingExercises && exerciseTracking.length === 0 && (
                 <View style={styles.emptyState}>
                   <Text style={styles.emptyEmoji}>🧘</Text>
                   <Text style={styles.emptyTitle}>Día de descanso</Text>
-                  <Text style={styles.emptySubtext}>No hay ejercicios asignados para este día. Descansa y recupérate.</Text>
+                  <Text style={styles.emptySubtext}>{exerciseEmptyMessage ?? 'No hay ejercicios asignados para este día. Descansa y recupérate.'}</Text>
                 </View>
               )}
             </>
@@ -568,21 +1080,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingTop: 4,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#efe6da',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#120f08',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 2,
   },
   headerTitle: {
     fontSize: 20,
@@ -711,6 +1208,75 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5a623',
   },
 
+  mealDayRow: {
+    marginTop: 2,
+  },
+  mealDayContent: {
+    paddingHorizontal: 2,
+    gap: 10,
+  },
+  mealDayCard: {
+    width: 74,
+    minHeight: 96,
+    borderRadius: 18,
+    backgroundColor: '#f5f3f0',
+    borderWidth: 1,
+    borderColor: '#e8e4dd',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  mealDayCardActive: {
+    backgroundColor: '#ffffff',
+    borderColor: '#1aa44f',
+    shadowColor: '#1aa44f',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  mealDayLabel: {
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '800',
+    color: '#9a9083',
+    letterSpacing: 0.4,
+  },
+  mealDayLabelActive: {
+    color: '#1aa44f',
+  },
+  mealDayDate: {
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '900',
+    color: '#c7c0b6',
+    marginTop: 4,
+  },
+  mealDayDateActive: {
+    color: '#0f1115',
+  },
+  mealDayMeta: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#9a9083',
+    marginTop: 1,
+  },
+  mealDayMetaActive: {
+    color: '#f5a623',
+  },
+  mealDaySubtext: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#c7c0b6',
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  mealDaySubtextActive: {
+    color: '#5f574d',
+  },
+
   // ── Day Summary ──────────────────────
   daySummaryRow: {
     flexDirection: 'row',
@@ -817,6 +1383,10 @@ const styles = StyleSheet.create({
     borderColor: '#a8ddbf',
     backgroundColor: '#f0fdf6',
   },
+  mealAvatarSkip: {
+    borderColor: '#e9dfdf',
+    backgroundColor: '#faf7f7',
+  },
   mealEmoji: {
     fontSize: 28,
   },
@@ -875,10 +1445,54 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
+  summaryBox: {
+    backgroundColor: '#f8f6f1',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#ede7dd',
+    gap: 6,
+  },
+  summaryLine: {
+    fontSize: 12,
+    color: '#5f574d',
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+
   // Expanded detail box
   detailBox: {
     marginTop: 12,
     gap: 12,
+  },
+  detailLoadingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  detailLoadingText: {
+    fontSize: 12,
+    color: '#9a9083',
+    fontWeight: '600',
+  },
+  detailErrorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+  },
+  detailErrorText: {
+    fontSize: 12,
+    color: '#991b1b',
+    fontWeight: '700',
+    flexShrink: 1,
   },
   detailSection: {
     gap: 6,
@@ -892,6 +1506,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#0f1115',
+  },
+  recipeBox: {
+    backgroundColor: '#fffaf0',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#f3e1b4',
+    padding: 12,
+    gap: 8,
+  },
+  recipeText: {
+    fontSize: 13,
+    color: '#4e4840',
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  detailPlaceholderText: {
+    fontSize: 12,
+    color: '#9a9083',
+    fontWeight: '600',
+    lineHeight: 18,
+    paddingVertical: 2,
   },
   ingredientRow: {
     flexDirection: 'row',
@@ -1182,5 +1817,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 18,
     maxWidth: 280,
+  },
+  retryButton: {
+    marginTop: 8,
+    backgroundColor: '#1aa44f',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  retryButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffffff',
   },
 });

@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
+import { BackButton } from '@/components/navigation/back-button';
 import { useAuth } from '@/hooks/use-auth';
 import { authStore } from '@/store/auth.store';
 
@@ -79,9 +80,7 @@ export default function PerfilEditarScreen() {
         <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
           {/* Header con botón back */}
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <MaterialCommunityIcons name="chevron-left" size={28} color="#0f1115" />
-            </TouchableOpacity>
+            <BackButton />
             <Text style={styles.headerTitle}>Editar Datos Personales</Text>
             <View style={styles.placeholder} />
           </View>
@@ -212,9 +211,6 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#efebe4',
-  },
-  backButton: {
-    padding: 4,
   },
   headerTitle: {
     fontSize: 18,

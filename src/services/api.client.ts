@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router } from 'expo-router';
 import { ApiErrorResponse } from '../types/auth.types';
 
 /**
@@ -9,6 +10,32 @@ import { ApiErrorResponse } from '../types/auth.types';
  *
  * Cambia esta URL según tu entorno:
  */
+function safeParseJson(input: unknown) {
+  if (typeof input !== 'string') return input;
+  const trimmed = input.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return input;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return input;
+  }
+}
+
+function sanitizeHeaders(headers: unknown) {
+  if (!headers || typeof headers !== 'object') return headers;
+  const record = headers as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const lower = key.toLowerCase();
+    if (lower === 'authorization' || lower === 'cookie' || lower === 'set-cookie') {
+      next[key] = value ? '[REDACTED]' : value;
+      continue;
+    }
+    next[key] = value;
+  }
+  return next;
+}
+
 const DEFAULT_API_BASE_URL = 'https://dk-fitt-api.onrender.com/api';
 
 /**
@@ -45,6 +72,8 @@ apiClient.interceptors.request.use(
       if (
         url.includes('/patient-profile') ||
         url.includes('/foods') ||
+        url.includes('/meal-tracking') ||
+        url.includes('/dishes') ||
         url.includes('/image-calorie-analyzer') ||
         url.includes('/upload/intake-image') ||
         url.includes('/additional-intake')
@@ -80,6 +109,8 @@ apiClient.interceptors.response.use(
       if (
         url.includes('/patient-profile') ||
         url.includes('/foods') ||
+        url.includes('/meal-tracking') ||
+        url.includes('/dishes') ||
         url.includes('/image-calorie-analyzer') ||
         url.includes('/upload/intake-image') ||
         url.includes('/additional-intake')
@@ -101,6 +132,8 @@ apiClient.interceptors.response.use(
 
     if (__DEV__) {
       const cfg = error.config as any;
+      const responseData = safeParseJson(error.response?.data);
+      const requestData = safeParseJson(cfg?.data);
       console.log('[api][error]', {
         url: cfg?.url,
         baseURL: cfg?.baseURL,
@@ -110,6 +143,24 @@ apiClient.interceptors.response.use(
         message: error.message,
         hasResponse: Boolean(error.response),
         status: error.response?.status,
+        request: {
+          params: cfg?.params,
+          data: requestData,
+          headers: sanitizeHeaders(cfg?.headers),
+        },
+        response: {
+          headers: sanitizeHeaders(error.response?.headers),
+          data: responseData,
+          // Metro/Chrome suelen colapsar Arrays/Objects como [Array]/[Object]. Esta cadena ayuda a ver `details` completos.
+          dataJson:
+            (() => {
+              try {
+                return JSON.stringify(responseData);
+              } catch {
+                return undefined;
+              }
+            })(),
+        },
       });
     }
     
@@ -144,6 +195,7 @@ apiClient.interceptors.response.use(
       } catch (refreshErr) {
         await AsyncStorage.removeItem('@dk_fitt:auth_session');
         delete apiClient.defaults.headers.common['Authorization'];
+        router.replace('/auth/login');
         return Promise.reject(new Error('Sesión finalizada de forma segura. Por favor, ingresa de nuevo para continuar.'));
       }
     }

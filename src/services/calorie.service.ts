@@ -1,8 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { apiClient } from '@/services/api.client';
 import { authStore } from '@/store/auth.store';
 import { intakeImageService } from '@/services/intake-image.service';
 import { IntakeEstimation } from '@/types/intake.types';
+import type { AdditionalIntakeRequest, AdditionalIntakeRecord } from '@/types/intake.types';
 
 export type MacroKey = 'protein' | 'carbs' | 'fat';
 
@@ -19,6 +21,24 @@ export type MacroProgress = {
 export type WeightEntry = {
   date: string;
   value: number;
+};
+
+export type WeightRecordApiResponse = {
+  id_registro_peso: number;
+  id_perfil: number;
+  fecha: string;
+  peso_kg: number | string;
+  created_at?: string;
+  diferencia_vs_ayer?: number | null;
+  diferencia_vs_inicio?: number | null;
+  diferencia_vs_anterior?: number | null;
+  es_primer_registro: boolean;
+};
+
+export type SaveDailyWeightResult = {
+  dashboard: CalorieDashboard;
+  record: WeightRecordApiResponse;
+  message?: string;
 };
 
 export type FoodEstimate = {
@@ -45,6 +65,7 @@ export type TrackedMealImpact = {
 };
 
 export type CalorieDashboard = {
+  date: string;
   dailyTarget: number;
   consumedCalories: number;
   planActive: boolean;
@@ -54,7 +75,7 @@ export type CalorieDashboard = {
   trackedMeals: Record<string, TrackedMealImpact>;
 };
 
-const STORAGE_KEY = '@dk_fitt:calorie_dashboard';
+const STORAGE_KEY_BASE = '@dk_fitt:calorie_dashboard';
 const PLAN_KEY = 'dkfit.planActive';
 
 const DEFAULT_MACROS: MacroProgress[] = [
@@ -88,6 +109,7 @@ const DEFAULT_MACROS: MacroProgress[] = [
 ];
 
 const DEFAULT_DASHBOARD: CalorieDashboard = {
+  date: formatLocalDate(),
   dailyTarget: 1240,
   consumedCalories: 770,
   planActive: true,
@@ -226,6 +248,199 @@ function buildFoodEstimateFromEstimation(params: {
   };
 }
 
+export function buildFoodEstimateFromIntakeEstimation(params: {
+  estimation: IntakeEstimation;
+  imageUri: string;
+  descripcion_alimento?: string;
+}): FoodEstimate {
+  return buildFoodEstimateFromEstimation(params);
+}
+
+function buildAdditionalIntakePayload(params: {
+  estimate: FoodEstimate;
+  imageUrl: string;
+  descripcion_alimento?: string;
+  calories?: number;
+}): AdditionalIntakeRequest {
+  const estimation = params.estimate.estimation ?? {};
+  const macros = estimation.macros ?? {};
+  const portionValue =
+    typeof estimation.porcion_estimada_g === 'number'
+      ? estimation.porcion_estimada_g
+      : typeof estimation.porcion_g === 'number'
+        ? estimation.porcion_g
+        : undefined;
+  const calories = typeof params.calories === 'number' ? params.calories : params.estimate.calories;
+
+  const proteins = Number(macros.proteinas_g);
+  const carbs = Number(macros.carbohidratos_g);
+  const fats = Number(macros.grasas_g);
+
+  const alimentos = (() => {
+    const raw = (estimation as any).alimentos_detectados;
+    if (!Array.isArray(raw) || raw.length === 0) return undefined;
+
+    const normalized = raw
+      .map((item: any) => {
+        if (typeof item === 'string') {
+          const nombre = item.trim();
+          return nombre.length > 0 ? { nombre } : null;
+        }
+
+        if (!item || typeof item !== 'object') return null;
+
+        const nombre =
+          typeof item.nombre === 'string'
+            ? item.nombre
+            : typeof item.name === 'string'
+              ? item.name
+              : undefined;
+
+        if (!nombre || nombre.trim().length === 0) return null;
+
+        const cantidad_g = Number(item.cantidad_g ?? item.cantidad ?? item.gramos ?? item.portion_g);
+        const calorias = Number(item.calorias ?? item.calories);
+
+        return {
+          nombre: nombre.trim(),
+          ...(Number.isFinite(cantidad_g) && cantidad_g > 0 ? { cantidad_g: cantidad_g } : {}),
+          ...(Number.isFinite(calorias) && calorias > 0 ? { calorias: calorias } : {}),
+        };
+      })
+      .filter(Boolean);
+
+    return normalized.length > 0 ? (normalized as any) : undefined;
+  })();
+
+  const descripcionAlimento = (() => {
+    const explicit = typeof params.descripcion_alimento === 'string' ? params.descripcion_alimento.trim() : '';
+    if (explicit.length > 0) return explicit;
+
+    const fromOcr = typeof estimation.texto_detectado === 'string' ? estimation.texto_detectado.trim() : '';
+    if (fromOcr.length > 0) return fromOcr;
+
+    const fromEstimateName = typeof params.estimate?.name === 'string' ? params.estimate.name.trim() : '';
+    if (fromEstimateName.length > 0) return fromEstimateName;
+
+    const firstDetected =
+      Array.isArray((estimation as any).alimentos_detectados) && typeof (estimation as any).alimentos_detectados?.[0]?.nombre === 'string'
+        ? String((estimation as any).alimentos_detectados[0].nombre).trim()
+        : '';
+    if (firstDetected.length > 0) return firstDetected;
+
+    return 'Consumo adicional';
+  })();
+
+  return {
+    // El backend actual valida este campo como requerido.
+    descripcion_alimento: descripcionAlimento,
+    imagen_url: params.imageUrl,
+    calorias_estimadas: Math.max(0, Math.round(calories)),
+    porcion_g: typeof portionValue === 'number' ? Math.max(0, Math.round(portionValue)) : undefined,
+    proteinas_g: Number.isFinite(proteins) && proteins > 0 ? Math.max(0, Math.round(proteins)) : undefined,
+    carbohidratos_g: Number.isFinite(carbs) && carbs > 0 ? Math.max(0, Math.round(carbs)) : undefined,
+    grasas_g: Number.isFinite(fats) && fats > 0 ? Math.max(0, Math.round(fats)) : undefined,
+    confianza_pct:
+      typeof estimation.confianza_pct === 'number'
+        ? Math.max(0, Math.min(100, Math.round(estimation.confianza_pct)))
+        : undefined,
+    alimentos_detectados: alimentos,
+  };
+}
+
+function extractAdditionalIntakeId(value: unknown): number | string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+
+  const record = value as Record<string, unknown>;
+  const nestedConsumption =
+    record.consumo && typeof record.consumo === 'object' ? (record.consumo as Record<string, unknown>) : undefined;
+  const nestedData =
+    record.data && typeof record.data === 'object' ? (record.data as Record<string, unknown>) : undefined;
+  const candidates = [
+    record.id_consumo_adicional,
+    record.id_consumo,
+    record.id,
+    record.id_registro,
+    record.consumo_id,
+    nestedConsumption?.id_consumo_adicional,
+    nestedConsumption?.id_consumo,
+    nestedConsumption?.id,
+    nestedConsumption?.id_registro,
+    nestedData?.id_consumo_adicional,
+    nestedData?.id_consumo,
+    nestedData?.id,
+    nestedData?.consumo && typeof nestedData.consumo === 'object'
+      ? (nestedData.consumo as Record<string, unknown>).id_consumo_adicional
+      : undefined,
+    nestedData?.consumo && typeof nestedData.consumo === 'object'
+      ? (nestedData.consumo as Record<string, unknown>).id_consumo
+      : undefined,
+    nestedData?.consumo && typeof nestedData.consumo === 'object'
+      ? (nestedData.consumo as Record<string, unknown>).id
+      : undefined,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
+    if (typeof candidate === 'string' && candidate.trim().length > 0) return candidate.trim();
+  }
+
+  return undefined;
+}
+
+function normalizeCalendarDate(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.trim().length === 0) return undefined;
+
+  const trimmed = value.trim();
+  const parsed = new Date(trimmed);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return trimmed.length >= 10 ? trimmed.slice(0, 10) : undefined;
+  }
+
+  return parsed.toISOString().slice(0, 10);
+}
+
+export function extractAdditionalIntakeDate(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+
+  const record = value as Record<string, unknown>;
+  const nestedConsumption =
+    record.consumo && typeof record.consumo === 'object' ? (record.consumo as Record<string, unknown>) : undefined;
+  const nestedData =
+    record.data && typeof record.data === 'object' ? (record.data as Record<string, unknown>) : undefined;
+  const candidates = [
+    record.fecha,
+    record.fecha_consumo,
+    record.created_at,
+    record.createdAt,
+    nestedConsumption?.fecha,
+    nestedConsumption?.fecha_consumo,
+    nestedConsumption?.created_at,
+    nestedConsumption?.createdAt,
+    nestedData?.fecha,
+    nestedData?.fecha_consumo,
+    nestedData?.created_at,
+    nestedData?.createdAt,
+    nestedData?.consumo && typeof nestedData.consumo === 'object'
+      ? (nestedData.consumo as Record<string, unknown>).fecha
+      : undefined,
+    nestedData?.consumo && typeof nestedData.consumo === 'object'
+      ? (nestedData.consumo as Record<string, unknown>).fecha_consumo
+      : undefined,
+    nestedData?.consumo && typeof nestedData.consumo === 'object'
+      ? (nestedData.consumo as Record<string, unknown>).created_at
+      : undefined,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeCalendarDate(candidate);
+    if (normalized) return normalized;
+  }
+
+  return undefined;
+}
+
 function formatLocalDate(date = new Date()) {
   const year = date.getFullYear();
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
@@ -317,8 +532,15 @@ function withNormalizedMacros(macros: MacroProgress[]) {
   }));
 }
 
+async function getDashboardStorageKey(): Promise<string> {
+  const user = await authStore.getUser();
+  const userId = typeof user?.id_usuario === 'number' ? user.id_usuario : undefined;
+  return userId ? `${STORAGE_KEY_BASE}:${userId}` : `${STORAGE_KEY_BASE}:anonymous`;
+}
+
 async function persistDashboard(dashboard: CalorieDashboard) {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(dashboard));
+  const storageKey = await getDashboardStorageKey();
+  await AsyncStorage.setItem(storageKey, JSON.stringify(dashboard));
 }
 
 async function createInitialWeightEntry() {
@@ -335,10 +557,55 @@ async function createInitialWeightEntry() {
   ];
 }
 
+function normalizeWeightRecord(record: WeightRecordApiResponse): WeightEntry {
+  const date =
+    typeof record.fecha === 'string' && record.fecha.length >= 10 ? record.fecha.slice(0, 10) : formatLocalDate();
+  const value = typeof record.peso_kg === 'number' ? record.peso_kg : Number.parseFloat(record.peso_kg);
+
+  return {
+    date,
+    value: Number.isFinite(value) ? Number(value.toFixed(2)) : 0,
+  };
+}
+
+export async function loadLatestWeightRecord(): Promise<WeightRecordApiResponse | null> {
+  const response = await apiClient.get<{ success: true; data: WeightRecordApiResponse[]; meta?: unknown }>(
+    '/weight-records/me',
+    {
+      params: {
+        page: 1,
+        limit: 1,
+      },
+    },
+  );
+
+  const latest = response.data.data?.[0];
+  return latest ?? null;
+}
+
+export async function loadWeightHistory(limit = 30): Promise<WeightEntry[]> {
+  const response = await apiClient.get<{ success: true; data: WeightRecordApiResponse[]; meta?: unknown }>(
+    '/weight-records/me',
+    {
+      params: {
+        page: 1,
+        limit,
+      },
+    },
+  );
+
+  return (response.data.data ?? [])
+    .map(normalizeWeightRecord)
+    .filter((entry) => Number.isFinite(entry.value))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 export async function loadCalorieDashboard(): Promise<CalorieDashboard> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY);
+  const storageKey = await getDashboardStorageKey();
+  const raw = await AsyncStorage.getItem(storageKey);
   const storedPlan = await AsyncStorage.getItem(PLAN_KEY);
   const user = await authStore.getUser();
+  const today = formatLocalDate();
 
   let targetDaily = DEFAULT_DASHBOARD.dailyTarget;
   let targetMacros = DEFAULT_MACROS;
@@ -366,6 +633,7 @@ export async function loadCalorieDashboard(): Promise<CalorieDashboard> {
     
     const created = {
       ...DEFAULT_DASHBOARD,
+      date: today,
       dailyTarget: targetDaily,
       consumedCalories: 0, // Reset to 0 initially
       planActive: storedPlan !== 'false',
@@ -378,22 +646,27 @@ export async function loadCalorieDashboard(): Promise<CalorieDashboard> {
 
   try {
     const parsed = JSON.parse(raw) as Partial<CalorieDashboard>;
+    const storedDate = typeof parsed.date === 'string' && parsed.date.length >= 10 ? parsed.date.slice(0, 10) : today;
+    const shouldResetDay = storedDate !== today;
     const normalized: CalorieDashboard = {
+      date: today,
       dailyTarget: user?.evaluacion_clinica ? targetDaily : (typeof parsed.dailyTarget === 'number' ? parsed.dailyTarget : DEFAULT_DASHBOARD.dailyTarget),
       consumedCalories:
-        typeof parsed.consumedCalories === 'number'
-          ? parsed.consumedCalories
-          : 0,
+        !shouldResetDay && typeof parsed.consumedCalories === 'number' ? parsed.consumedCalories : 0,
       planActive:
         typeof parsed.planActive === 'boolean' ? parsed.planActive : storedPlan !== 'false',
       macros: user?.evaluacion_clinica ? targetMacros : normalizeMacros(parsed.macros),
       weightEntries: normalizeWeights(parsed.weightEntries),
-      mealHistory: normalizeMeals(parsed.mealHistory),
-      trackedMeals: normalizeTrackedMeals(parsed.trackedMeals),
+      mealHistory: shouldResetDay ? [] : normalizeMeals(parsed.mealHistory),
+      trackedMeals: shouldResetDay ? {} : normalizeTrackedMeals(parsed.trackedMeals),
     };
 
     if (normalized.weightEntries.length === 0) {
       normalized.weightEntries = await createInitialWeightEntry();
+      await persistDashboard(normalized);
+    }
+
+    if (shouldResetDay) {
       await persistDashboard(normalized);
     }
 
@@ -402,6 +675,7 @@ export async function loadCalorieDashboard(): Promise<CalorieDashboard> {
     const initialWeights = await createInitialWeightEntry();
     const fallback = {
       ...DEFAULT_DASHBOARD,
+      date: today,
       dailyTarget: targetDaily,
       consumedCalories: 0,
       macros: targetMacros,
@@ -413,16 +687,27 @@ export async function loadCalorieDashboard(): Promise<CalorieDashboard> {
   }
 }
 
-export async function saveDailyWeight(value: number): Promise<CalorieDashboard> {
+export async function saveDailyWeight(value: number): Promise<SaveDailyWeightResult> {
+  const response = await apiClient.post<{ success: true; data: WeightRecordApiResponse; message?: string }>(
+    '/weight-records',
+    {
+      peso_kg: Number(value.toFixed(2)),
+    },
+  );
+
+  const savedEntry = normalizeWeightRecord(response.data.data);
   const dashboard = await loadCalorieDashboard();
-  const today = formatLocalDate();
-  const cleaned = dashboard.weightEntries.filter((entry) => entry.date !== today);
+  const cleaned = dashboard.weightEntries.filter((entry) => entry.date !== savedEntry.date);
   const updated: CalorieDashboard = {
     ...dashboard,
-    weightEntries: [{ date: today, value }, ...cleaned].sort((a, b) => b.date.localeCompare(a.date)),
+    weightEntries: [savedEntry, ...cleaned].sort((a, b) => b.date.localeCompare(a.date)),
   };
   await persistDashboard(updated);
-  return updated;
+  return {
+    dashboard: updated,
+    record: response.data.data,
+    message: response.data.message,
+  };
 }
 
 export async function estimateMealFromPhoto(
@@ -537,6 +822,78 @@ export async function confirmEstimatedMeal(estimate: FoodEstimate): Promise<Calo
 
   await persistDashboard(updated);
   return updated;
+}
+
+async function applyAdditionalIntakeToDashboard(params: {
+  id_consumo_adicional: number | string;
+  calories: number;
+}): Promise<CalorieDashboard> {
+  const dashboard = await loadCalorieDashboard();
+  const trackingKey = `additional:${params.id_consumo_adicional}`;
+
+  if (dashboard.trackedMeals[trackingKey]) {
+    return dashboard;
+  }
+
+  const updated: CalorieDashboard = {
+    ...dashboard,
+    consumedCalories: dashboard.consumedCalories + Math.max(0, Math.round(params.calories)),
+    trackedMeals: {
+      ...dashboard.trackedMeals,
+      [trackingKey]: {
+        calories: Math.max(0, Math.round(params.calories)),
+        macroImpact: {
+          protein: 0,
+          carbs: 0,
+          fat: 0,
+        },
+      },
+    },
+  };
+
+  await persistDashboard(updated);
+  return updated;
+}
+
+export async function registerAdditionalIntakeFromEstimate(params: {
+  estimate: FoodEstimate;
+  imageUrl: string;
+  descripcion_alimento?: string;
+  calories?: number;
+}): Promise<AdditionalIntakeRecord> {
+  const payload = buildAdditionalIntakePayload(params);
+  const record = await intakeImageService.registerAdditionalIntake(payload);
+  const rawId = extractAdditionalIntakeId(record);
+  const id = typeof rawId === 'string' ? Number(rawId) : rawId;
+
+  if (!id || !Number.isFinite(id)) {
+    throw new Error('La API no devolvió id_consumo_adicional para confirmar el registro.');
+  }
+
+  return {
+    ...record,
+    id_consumo_adicional: id,
+  };
+}
+
+export async function confirmAdditionalIntakeOnBackend(params: {
+  id_consumo_adicional: number | string;
+  estimate: FoodEstimate;
+  calories?: number;
+}): Promise<void> {
+  if (typeof params.id_consumo_adicional === 'undefined' || params.id_consumo_adicional === null || `${params.id_consumo_adicional}`.trim().length === 0) {
+    throw new Error('Falta id_consumo_adicional para confirmar el consumo.');
+  }
+
+  const calories = typeof params.calories === 'number' ? params.calories : params.estimate.calories;
+  await intakeImageService.confirmAdditionalIntake({
+    id_consumo_adicional: params.id_consumo_adicional,
+    calorias_estimadas: Math.max(0, Math.round(calories)),
+  });
+}
+
+export async function discardAdditionalIntakeOnBackend(id_consumo_adicional: number | string): Promise<void> {
+  await intakeImageService.discardAdditionalIntake(id_consumo_adicional);
 }
 
 export async function setDailyCalorieTarget(target: number): Promise<CalorieDashboard> {

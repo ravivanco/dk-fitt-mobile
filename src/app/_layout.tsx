@@ -22,9 +22,26 @@ export default function RootLayout() {
 
 	const checkSession = async () => {
 		try {
-			// Politica de seguridad solicitada: siempre pedir login al abrir la app.
-			await authStore.clearSession();
-			setPendingRoute('/auth/login');
+			const session = await authStore.loadSession();
+			if (!session) {
+				setPendingRoute('/auth/login');
+				return;
+			}
+
+			// Mantener la misma regla de enrutado que en `use-auth.ts` para evitar
+			// inconsistencias al reabrir la app con sesión activa.
+			const user = (session as any).user ?? {};
+			if (!user.formulario_completado) {
+				setPendingRoute('/formularios/form01');
+				return;
+			}
+
+			if (user.modulo_habilitado) {
+				setPendingRoute('/mi-plan');
+				return;
+			}
+
+			setPendingRoute('/home');
 		} catch {
 			setPendingRoute('/auth/login');
 		} finally {
@@ -44,13 +61,8 @@ export default function RootLayout() {
 				<Stack.Screen name="mi-plan" />
 				<Stack.Screen name="control-calorico" />
 				<Stack.Screen name="menus" />
-				<Stack.Screen name="ejercicios" />
-				<Stack.Screen name="ejercicios/gimnasio" />
-				<Stack.Screen name="ejercicios/running" />
-				<Stack.Screen name="ejercicios/futbol" />
-				<Stack.Screen name="ejercicios/basquet" />
-				<Stack.Screen name="ejercicios/ciclismo" />
-				<Stack.Screen name="ejercicios/natacion" />
+				<Stack.Screen name="ejercicios/index" />
+				<Stack.Screen name="ejercicios/[deporte]" />
 				<Stack.Screen name="progreso" />
 				<Stack.Screen name="perfil" />
 				<Stack.Screen name="perfil-editar" />

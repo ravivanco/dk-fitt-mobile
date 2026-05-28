@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { MaterialCommunityIcons, MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, Text, TouchableOpacity, View, ScrollView, ActivityIndicator, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import Svg, { Circle, Path, Line, Text as SvgText, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
+import Svg, { Circle, Text as SvgText } from 'react-native-svg';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
-import { IMCGauge } from '@/components/metrics/IMC';
 import { useAuth } from '@/hooks/use-auth';
 import { authStore } from '@/store/auth.store';
 
@@ -305,10 +304,17 @@ export default function PerfilScreen() {
 
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.contentContainer}>
           <View style={styles.pageHeader}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.pageHeaderLabel}>Mi Perfil</Text>
               <Text style={styles.pageHeaderSubtitle}>Tu información personal</Text>
             </View>
+            <Pressable
+              onPress={() => router.push('/perfil-editar')}
+              style={styles.settingsButton}
+              hitSlop={10}
+            >
+              <MaterialCommunityIcons name="cog-outline" size={22} color="#0f172a" />
+            </Pressable>
           </View>
 
           <View style={styles.profileCard}>
@@ -365,19 +371,8 @@ export default function PerfilScreen() {
               </View>
             </View>
 
-            <View style={styles.statusRow}>
-              <View style={styles.statusLeftContent}>
-                <MaterialIcons name="fitness-center" size={20} color="#0f172a" />
-                <Text style={styles.statusLabel}>Plan</Text>
-              </View>
-              <View style={[styles.statusBadge, styles.statusBadgePending]}>
-                <MaterialIcons name="cancel" size={16} color="#ef4444" />
-                <Text style={styles.statusTextPending}>Desactivado</Text>
-              </View>
-            </View>
-
-            <View style={{ flexDirection: 'row', gap: 12, marginTop: 16, width: '100%' }}>
-              <TouchableOpacity style={[styles.editButton, { flex: 1 }]} onPress={() => router.push('/perfil-editar')}>
+            <View style={styles.actionRow}>
+              <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/perfil-editar')}>
                 <LinearGradient
                   colors={["#ecb607", "#f6c510"]}
                   start={{ x: 0, y: 0 }}
@@ -388,7 +383,7 @@ export default function PerfilScreen() {
                   <Text style={styles.editButtonText}>Editar Perfil</Text>
                 </LinearGradient>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.logoutButtonRed, isLoading && styles.logoutButtonDisabled]} activeOpacity={0.85} onPress={() => void logout()} disabled={isLoading}>
+              <TouchableOpacity style={[styles.actionButton, isLoading && styles.logoutButtonDisabled]} activeOpacity={0.85} onPress={() => void logout()} disabled={isLoading}>
                 <LinearGradient
                   colors={["#ef4444", "#dc2626"]}
                   start={{ x: 0, y: 0 }}
@@ -411,14 +406,15 @@ export default function PerfilScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#fdfcf9' },
+  safeArea: { flex: 1, backgroundColor: '#f8f6f1' },
   wrapper: { flex: 1, position: 'relative' },
   content: { flex: 1, paddingHorizontal: 16, paddingTop: 20 },
   contentContainer: { paddingBottom: 120, paddingHorizontal: 0 },
   
-  pageHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, marginBottom: 24 },
+  pageHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, marginBottom: 18 },
   pageHeaderLabel: { fontSize: 32, fontWeight: '900', color: '#0f172a', letterSpacing: -0.5 },
   pageHeaderSubtitle: { fontSize: 15, color: '#7c7268', marginTop: 4, fontWeight: '500' },
+  settingsButton: { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.88)', borderWidth: 1, borderColor: '#efe6da', alignItems: 'center', justifyContent: 'center' },
   
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
@@ -430,7 +426,7 @@ const styles = StyleSheet.create({
   profileCard: { 
     backgroundColor: 'white', 
     borderRadius: 28, 
-    padding: 28, 
+    padding: 22, 
     alignItems: 'center', 
     marginBottom: 28, 
     shadowColor: '#1a1a1a', 
@@ -444,18 +440,18 @@ const styles = StyleSheet.create({
   
   avatarContainer: { position: 'relative', marginBottom: 20 },
   avatar: { 
-    width: 100, 
-    height: 100, 
-    borderRadius: 50, 
+    width: 92, 
+    height: 92, 
+    borderRadius: 46, 
     justifyContent: 'center', 
     alignItems: 'center',
     borderWidth: 4,
     borderColor: 'rgba(255,255,255,0.8)',
   },
-  avatarText: { color: 'white', fontSize: 42, fontWeight: '700' },
+  avatarText: { color: 'white', fontSize: 38, fontWeight: '800' },
   verifyBadge: { position: 'absolute', right: -2, bottom: -2, backgroundColor: '#10b981', borderRadius: 24, padding: 2, borderWidth: 3, borderColor: 'white' },
   
-  userName: { fontSize: 28, fontWeight: '800', color: '#0f172a', marginBottom: 6, letterSpacing: -0.5 },
+  userName: { fontSize: 26, fontWeight: '900', color: '#0f172a', marginBottom: 6, letterSpacing: -0.5 },
   userEmail: { fontSize: 13, color: '#64748b', marginBottom: 24, fontWeight: '500' },
   
   infoRow: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24, gap: 12 },
@@ -475,16 +471,11 @@ const styles = StyleSheet.create({
   statusTextPending: { color: '#ef4444' },
   
 
-  editButton: {
-    width: '100%',
-    marginTop: 16,
-    borderRadius: 12,
-    overflow: 'hidden',
-    height: 40,
-  },
+  actionRow: { flexDirection: 'row', gap: 12, marginTop: 18, width: '100%' },
+  actionButton: { flex: 1, borderRadius: 14, height: 48, overflow: 'hidden' },
   editButtonGradient: {
     width: '100%',
-    height: 40,
+    height: 48,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
@@ -502,14 +493,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 
-  logoutButtonRed: {
-    flex: 1,
-    borderRadius: 12,
-    height: 40,
-    overflow: 'hidden',
-  },
   logoutButtonGradientRed: {
-    height: 40,
+    height: 48,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',

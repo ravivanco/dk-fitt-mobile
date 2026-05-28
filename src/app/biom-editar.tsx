@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
+import { BackButton } from '@/components/navigation/back-button';
 
 export default function BiomEditarScreen() {
   const [peso, setPeso] = useState('');
@@ -54,9 +55,7 @@ export default function BiomEditarScreen() {
         <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <MaterialCommunityIcons name="chevron-left" size={28} color="#0f1115" />
-            </TouchableOpacity>
+            <BackButton />
             <Text style={styles.headerTitle}>Bioimpedancia</Text>
             <View style={styles.placeholder} />
           </View>
@@ -186,9 +185,6 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#efebe4',
-  },
-  backButton: {
-    padding: 4,
   },
   headerTitle: {
     fontSize: 18,

@@ -73,9 +73,11 @@ export const authStore = {
       // Token expirado pero tenemos refresh_token
       // Por ahora retornamos null (el refresh lo implementamos después)
       // TODO: Implementar renovación automática con refresh_token
+      await this.clearSession();
       return null;
 
     } catch {
+      await this.clearSession();
       return null;
     }
   },

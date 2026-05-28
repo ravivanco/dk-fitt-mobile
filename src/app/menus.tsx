@@ -1,9 +1,9 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
+import { BackButton } from '@/components/navigation/back-button';
 import { BottomNav } from '@/components/navigation/bottom-nav';
 
 export default function MenusScreen() {
@@ -14,9 +14,7 @@ export default function MenusScreen() {
 
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()}>
-              <MaterialCommunityIcons name="arrow-left" size={24} color="#0f1115" />
-            </TouchableOpacity>
+            <BackButton />
             <Text style={styles.title}>Menus</Text>
             <View style={{ width: 24 }} />
           </View>

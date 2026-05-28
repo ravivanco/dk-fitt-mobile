@@ -7,6 +7,8 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
+import { BackButton } from '@/components/navigation/back-button';
 import { BottomNav } from '@/components/navigation/bottom-nav';
 import { apiClient } from '@/services/api.client';
 import { intakeImageService } from '@/services/intake-image.service';
@@ -25,15 +28,20 @@ import { authStore } from '@/store/auth.store';
 import {
   CalorieDashboard,
   FoodEstimate,
-  confirmEstimatedMeal,
   estimateMealFromUploadedImage,
-  getCalorieProgress,
   getLatestWeight,
-  getRemainingCalories,
   getWeightDelta,
   loadCalorieDashboard,
+  loadLatestWeightRecord,
+  confirmAdditionalIntakeOnBackend,
+  extractAdditionalIntakeDate,
   saveDailyWeight,
+  registerAdditionalIntakeFromEstimate,
+  type WeightEntry,
 } from '@/services/calorie.service';
+import { fetchCalorieControlDashboard, type CalorieControlDashboard } from '@/services/calorie-control.service';
+import { refreshCalorieControlDashboard } from '@/store/calorie-control-dashboard.store';
+import { fetchExerciseRecommendations, postExerciseTracking, type ExerciseRecommendation } from '@/services/exercise.service';
 
 function ProgressRing({
   size,
@@ -104,8 +112,23 @@ function formatShortDate(date: string) {
   });
 }
 
+function formatLocalIsoDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatLocalTimeHHmm(date = new Date()) {
+  const hours = `${date.getHours()}`.padStart(2, '0');
+  const minutes = `${date.getMinutes()}`.padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
 export default function ControlCaloricoScreen() {
-  const [dashboard, setDashboard] = useState<CalorieDashboard | null>(null);
+  const [legacyDashboard, setLegacyDashboard] = useState<CalorieDashboard | null>(null);
+  const [balanceDashboard, setBalanceDashboard] = useState<CalorieControlDashboard | null>(null);
+  const [latestWeightDisplay, setLatestWeightDisplay] = useState<WeightEntry | null>(null);
   const [userEval, setUserEval] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [weightInput, setWeightInput] = useState('');
@@ -118,6 +141,28 @@ export default function ControlCaloricoScreen() {
   const [mealDescription, setMealDescription] = useState('');
   const [confirmingMeal, setConfirmingMeal] = useState(false);
   const [manualCalories, setManualCalories] = useState('');
+  const [exerciseRecs, setExerciseRecs] = useState<ExerciseRecommendation[]>([]);
+  const [loadingExerciseRecs, setLoadingExerciseRecs] = useState(false);
+  const [exerciseRecsError, setExerciseRecsError] = useState<string | null>(null);
+  const [savingExerciseId, setSavingExerciseId] = useState<string | number | null>(null);
+  const [weightModal, setWeightModal] = useState<{
+    visible: boolean;
+    variant: 'confirm' | 'info' | 'error';
+    title: string;
+    message: string;
+    primaryLabel?: string;
+    secondaryLabel?: string;
+  }>({
+    visible: false,
+    variant: 'info',
+    title: '',
+    message: '',
+    primaryLabel: 'OK',
+    secondaryLabel: undefined,
+  });
+  const [pendingWeightConfirm, setPendingWeightConfirm] = useState<null | (() => Promise<void> | void)>(null);
+
+  const [selectedDate] = useState(() => formatLocalIsoDate());
 
   const loadDashboardState = React.useCallback(async () => {
     let mounted = true;
@@ -137,17 +182,30 @@ export default function ControlCaloricoScreen() {
         console.log('Error fetching history:', e);
       }
 
-      const nextDashboard = await loadCalorieDashboard();
-      if (mounted) {
-        setDashboard(nextDashboard);
-        const latestWeight = getLatestWeight(nextDashboard);
-        setWeightInput(latestWeight ? latestWeight.value.toString() : '');
+      const [nextBalance, nextLegacy] = await Promise.all([
+        refreshCalorieControlDashboard(selectedDate),
+        loadCalorieDashboard(),
+      ]);
+      if (!mounted) return;
+      setBalanceDashboard(nextBalance);
+      setLegacyDashboard(nextLegacy);
+
+      const latestWeightRecord = await loadLatestWeightRecord();
+      if (latestWeightRecord) {
+        const latestWeightValue = Number(latestWeightRecord.peso_kg);
+        const latestWeightEntry = Number.isFinite(latestWeightValue)
+          ? { date: latestWeightRecord.fecha.slice(0, 10), value: Number(latestWeightValue.toFixed(2)) }
+          : null;
+        setLatestWeightDisplay(latestWeightEntry);
+      } else {
+        setLatestWeightDisplay(null);
       }
+      setWeightInput('');
     } finally {
       if (mounted) setLoading(false);
     }
     return () => { mounted = false; };
-  }, []);
+  }, [selectedDate]);
 
   useEffect(() => {
     void loadDashboardState();
@@ -159,19 +217,20 @@ export default function ControlCaloricoScreen() {
     }, [loadDashboardState])
   );
 
-  const latestWeight = dashboard ? getLatestWeight(dashboard) : null;
-  const weightDelta = dashboard ? getWeightDelta(dashboard) : 0;
+  const latestWeight = latestWeightDisplay ?? (legacyDashboard ? getLatestWeight(legacyDashboard) : null);
+  const weightDelta = legacyDashboard ? getWeightDelta(legacyDashboard) : 0;
   
-  const dailyTarget = userEval?.calorias_diarias_calculadas ?? dashboard?.dailyTarget ?? 1771;
-  const calorieValue = dailyTarget; // Mostrar el total directamente
-  const calorieProgress = 1; // Barra completa
-  const calorieRingColor = '#1aa44f';
+  const dailyTarget = userEval?.calorias_diarias_calculadas ?? balanceDashboard?.balance?.dailyTarget ?? 1771;
+  const consumedCalories = balanceDashboard?.balance?.consumedCalories ?? 0;
+  const calorieValue = consumedCalories;
+  const calorieProgress = Math.max(0, Math.min(1, consumedCalories / (dailyTarget || 1)));
+  const calorieRingColor = consumedCalories > dailyTarget ? '#ef4444' : '#1aa44f';
   
-  const remainingCalories = dashboard ? getRemainingCalories(dashboard) : 470;
-  const planActive = dashboard?.planActive ?? true;
+  const remainingCalories = balanceDashboard?.balance?.remainingCalories ?? (dailyTarget - consumedCalories);
+  const planActive = true;
 
   const weightDeltaLabel = useMemo(() => {
-    if (!latestWeight || !dashboard || dashboard.weightEntries.length < 2) {
+    if (!latestWeight || !legacyDashboard || legacyDashboard.weightEntries.length < 2) {
       return 'Sin cambio reciente';
     }
 
@@ -180,27 +239,238 @@ export default function ControlCaloricoScreen() {
     }
 
     return weightDelta > 0 ? `+${weightDelta} kg vs. ayer` : `${weightDelta} kg vs. ayer`;
-  }, [dashboard, latestWeight, weightDelta]);
+  }, [legacyDashboard, latestWeight, weightDelta]);
+
+  const pushLocalWeightEntry = (value: number, date = formatLocalIsoDate()) => {
+    const entry: WeightEntry = {
+      date,
+      value: Number(value.toFixed(2)),
+    };
+
+    setLatestWeightDisplay(entry);
+
+    setLegacyDashboard((current) =>
+      current
+        ? {
+          ...current,
+          weightEntries: [
+            entry,
+            ...current.weightEntries.filter((item) => item.date !== date),
+          ].sort((a, b) => b.date.localeCompare(a.date)),
+        }
+        : current,
+    );
+    setWeightInput('');
+  };
+
+  const closeWeightModal = () => {
+    setWeightModal((prev) => ({ ...prev, visible: false }));
+    setPendingWeightConfirm(null);
+  };
+
+  const openWeightModal = (params: {
+    variant: 'confirm' | 'info' | 'error';
+    title: string;
+    message: string;
+    primaryLabel?: string;
+    secondaryLabel?: string;
+    onConfirm?: null | (() => Promise<void> | void);
+  }) => {
+    setPendingWeightConfirm(params.onConfirm ?? null);
+    setWeightModal({
+      visible: true,
+      variant: params.variant,
+      title: params.title,
+      message: params.message,
+      primaryLabel: params.primaryLabel,
+      secondaryLabel: params.secondaryLabel,
+    });
+  };
 
   const handleSaveWeight = async () => {
-    const numericWeight = Number(weightInput.replace(',', '.'));
+    if (savingWeight) return;
 
-    if (!numericWeight || Number.isNaN(numericWeight) || numericWeight < 25 || numericWeight > 350) {
-      Alert.alert('Peso invalido', 'Ingresa un valor realista en kilogramos.');
+    if (weightInput.includes(',')) {
+      openWeightModal({
+        variant: 'error',
+        title: 'Formato inválido',
+        message: 'Usa punto "." para decimales.\nEjemplo: 87.5',
+        primaryLabel: 'Entendido',
+      });
       return;
     }
 
-    setSavingWeight(true);
-    try {
-      const updated = await saveDailyWeight(Number(numericWeight.toFixed(1)));
-      setDashboard(updated);
-      Alert.alert('Peso guardado', 'Tu registro del dia se actualizo correctamente.');
-    } catch {
-      Alert.alert('Error', 'No pudimos guardar tu peso por ahora.');
-    } finally {
-      setSavingWeight(false);
+    const numericWeight = Number(weightInput);
+
+    if (!numericWeight || Number.isNaN(numericWeight) || numericWeight < 25 || numericWeight > 350) {
+      openWeightModal({
+        variant: 'error',
+        title: 'Peso inválido',
+        message: 'Ingresa un valor realista en kilogramos (25–350).',
+        primaryLabel: 'OK',
+      });
+      return;
     }
+
+    const submit = async () => {
+      setSavingWeight(true);
+      try {
+      const result = await saveDailyWeight(Number(numericWeight.toFixed(1)));
+      setLegacyDashboard(result.dashboard);
+      setLatestWeightDisplay({
+        date: result.record.fecha.slice(0, 10),
+        value: Number(Number(result.record.peso_kg).toFixed(2)),
+      });
+      setWeightInput('');
+
+      const record = result.record;
+      const date = typeof record?.fecha === 'string' ? record.fecha.slice(0, 10) : formatLocalIsoDate();
+      const value = Number(record?.peso_kg);
+      const displayValue = Number.isFinite(value) ? value.toFixed(2) : numericWeight.toFixed(1);
+
+      openWeightModal({
+        variant: 'info',
+        title: 'Peso guardado',
+        message: `Peso registrado correctamente.\n\nFecha: ${date}\nPeso: ${displayValue} kg`,
+        primaryLabel: 'Listo',
+      });
+      } catch (error: any) {
+      const status = typeof error?.status === 'number' ? error.status : undefined;
+      const backendMessage =
+        typeof error?.message === 'string' && error.message.trim().length > 0
+          ? error.message
+          : typeof error?.backendData?.error === 'string'
+            ? error.backendData.error
+            : typeof error?.backendData?.error?.message === 'string'
+              ? error.backendData.error.message
+              : undefined;
+
+      if (status === 409) {
+        const latestRecord = await loadLatestWeightRecord();
+        if (latestRecord) {
+          const latestValue = Number(latestRecord.peso_kg);
+          const latestEntry = Number.isFinite(latestValue)
+            ? { date: latestRecord.fecha.slice(0, 10), value: Number(latestValue.toFixed(2)) }
+            : null;
+
+          setLatestWeightDisplay(latestEntry);
+          setLegacyDashboard((current) =>
+            current
+              ? {
+                ...current,
+                weightEntries: [
+                  latestEntry ?? {
+                    date: latestRecord.fecha.slice(0, 10),
+                    value: current.weightEntries[0]?.value ?? 0,
+                  },
+                  ...current.weightEntries.filter((entry) => entry.date !== latestRecord.fecha.slice(0, 10)),
+                ],
+              }
+              : current,
+          );
+          setWeightInput('');
+
+          openWeightModal({
+            variant: 'info',
+            title: 'Regresa el dia de mañana',
+            message: [
+              backendMessage ?? 'La base de datos ya tiene un registro para hoy.',
+              `Fecha: ${latestRecord.fecha.slice(0, 10)}`,
+              `Peso guardado: ${Number.isFinite(latestValue) ? latestValue.toFixed(2) : latestRecord.peso_kg} kg`,
+            ].join('\n'),
+            primaryLabel: 'Entendido',
+          });
+        } else {
+          if (__DEV__) {
+            pushLocalWeightEntry(Number(numericWeight.toFixed(1)));
+            setWeightInput('');
+            openWeightModal({
+              variant: 'info',
+              title: 'Prueba local guardada',
+              message: 'La API no permitió duplicar el registro de hoy, pero la app guardó este valor sólo en memoria local para que puedas seguir probando.',
+              primaryLabel: 'OK',
+            });
+          } else {
+            openWeightModal({
+              variant: 'info',
+              title: 'Ya registrado',
+              message: backendMessage ?? 'Ya registraste tu peso hoy. Solo puedes registrar uno por día.',
+              primaryLabel: 'OK',
+            });
+          }
+        }
+      } else if (status === 400) {
+        openWeightModal({
+          variant: 'error',
+          title: 'Datos inválidos',
+          message: backendMessage ?? 'La API rechazó el peso enviado. Revisa el formato y vuelve a intentarlo.',
+          primaryLabel: 'OK',
+        });
+      } else {
+        openWeightModal({
+          variant: 'error',
+          title: 'Error',
+          message: backendMessage ?? 'No pudimos guardar tu peso por ahora.',
+          primaryLabel: 'OK',
+        });
+      }
+      } finally {
+        setSavingWeight(false);
+      }
+    };
+
+    openWeightModal({
+      variant: 'confirm',
+      title: 'Confirmar los cambios',
+      message: `Revisa el valor antes de confirmar.\n\nPeso a registrar: ${Number(numericWeight.toFixed(1))} kg`,
+      primaryLabel: 'Confirmar',
+      secondaryLabel: 'Cancelar',
+      onConfirm: submit,
+    });
   };
+
+  const caloriesForRecommendations = useMemo(() => {
+    if (!estimate) return 0;
+    if (estimate.requiresManualCalories) {
+      const parsed = Number(manualCalories);
+      if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+      return Math.round(parsed);
+    }
+    return Math.max(0, Math.round(estimate.calories));
+  }, [estimate, manualCalories]);
+
+  useEffect(() => {
+    if (!estimate) return;
+    if (!caloriesForRecommendations || caloriesForRecommendations <= 0) {
+      setExerciseRecs([]);
+      setExerciseRecsError(null);
+      setLoadingExerciseRecs(false);
+      return;
+    }
+
+    let alive = true;
+    const timer = setTimeout(async () => {
+      setLoadingExerciseRecs(true);
+      setExerciseRecsError(null);
+      try {
+        const result = await fetchExerciseRecommendations({ calories: caloriesForRecommendations });
+        if (!alive) return;
+        setExerciseRecs(Array.isArray(result.recomendaciones) ? result.recomendaciones.slice(0, 4) : []);
+      } catch (err: any) {
+        if (!alive) return;
+        const message = err instanceof Error ? err.message : 'No pudimos cargar recomendaciones.';
+        setExerciseRecs([]);
+        setExerciseRecsError(message);
+      } finally {
+        if (alive) setLoadingExerciseRecs(false);
+      }
+    }, 250);
+
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [estimate, caloriesForRecommendations]);
 
   const handleAnalyzePhoto = async (mode: 'camera' | 'library') => {
     try {
@@ -237,7 +507,11 @@ export default function ControlCaloricoScreen() {
       setManualCalories('');
 
       setUploadingPhoto(true);
-      const upload = await intakeImageService.uploadIntakeImage({ imageUri: result.assets[0].uri });
+      const description = mealDescription.trim().length > 0 ? mealDescription.trim() : undefined;
+      const upload = await intakeImageService.uploadIntakeImage({
+        imageUri: result.assets[0].uri,
+        descripcion_alimento: description,
+      });
       const url = typeof upload?.imagen_url === 'string' ? upload.imagen_url : undefined;
       if (!url) {
         throw new Error('No se pudo subir la imagen. Verifica tu conexión.');
@@ -245,6 +519,10 @@ export default function ControlCaloricoScreen() {
       setUploadedImageUrl(url);
     } catch (error: any) {
       const status = typeof error?.status === 'number' ? error.status : undefined;
+      setSelectedImageUri(null);
+      setUploadedImageUrl(null);
+      setEstimate(null);
+      setManualCalories('');
       if (status === 401) {
         Alert.alert('Sesión requerida', 'Inicia sesión para poder analizar tu comida.');
       } else if (status === 403) {
@@ -259,37 +537,6 @@ export default function ControlCaloricoScreen() {
       }
     } finally {
       setUploadingPhoto(false);
-    }
-  };
-
-  const handleConfirmEstimate = async () => {
-    if (!estimate) return;
-
-    try {
-      setConfirmingMeal(true);
-      const needsManual = Boolean(estimate.requiresManualCalories);
-      const manualValue = Number(manualCalories.replace(',', '.'));
-      if (needsManual) {
-        if (!manualValue || Number.isNaN(manualValue) || manualValue < 1 || manualValue > 5000) {
-          Alert.alert('Calorías requeridas', 'Ingresa un valor válido para registrar esta comida.');
-          return;
-        }
-      }
-
-      const updated = await confirmEstimatedMeal({
-        ...estimate,
-        calories: needsManual ? Math.round(manualValue) : estimate.calories,
-      });
-      setDashboard(updated);
-      setEstimate(null);
-      setSelectedImageUri(null);
-      setUploadedImageUrl(null);
-      setMealDescription('');
-      Alert.alert('Comida registrada', 'Las calorías ya impactan tu resumen del día.');
-    } catch {
-      Alert.alert('Error', 'No pudimos registrar esta comida.');
-    } finally {
-      setConfirmingMeal(false);
     }
   };
 
@@ -335,7 +582,113 @@ export default function ControlCaloricoScreen() {
     }
   };
 
-  if (loading || !dashboard) {
+  const handleConfirmEstimate = async () => {
+    if (!estimate) return;
+
+    try {
+      setConfirmingMeal(true);
+      const needsManual = Boolean(estimate.requiresManualCalories);
+      const manualValue = Number(manualCalories.replace(',', '.'));
+      const finalCalories = needsManual ? Math.round(manualValue) : estimate.calories;
+      if (needsManual) {
+        if (!manualValue || Number.isNaN(manualValue) || manualValue < 1 || manualValue > 5000) {
+          Alert.alert('Calorías requeridas', 'Ingresa un valor válido para registrar esta comida.');
+          return;
+        }
+      }
+
+      const registration = await registerAdditionalIntakeFromEstimate({
+        estimate: {
+          ...estimate,
+          calories: finalCalories,
+        },
+        imageUrl: uploadedImageUrl ?? estimate.imageUri,
+        descripcion_alimento: mealDescription.trim().length > 0 ? mealDescription.trim() : undefined,
+        calories: finalCalories,
+      });
+
+      const intakeDate = extractAdditionalIntakeDate(registration);
+      const today = formatLocalIsoDate();
+
+      if (false && intakeDate && intakeDate !== today) {
+        const message = `Este consumo quedó guardado, pero no se puede confirmar porque es del ${intakeDate}. Solo puedes confirmar consumos del día actual.`;
+        if (__DEV__) {
+          console.log('[ui][additional-intake][skip-confirm]', {
+            intakeDate,
+            today,
+            registration,
+          });
+        }
+
+        setEstimate(null);
+        setSelectedImageUri(null);
+        setUploadedImageUrl(null);
+        setMealDescription('');
+        Alert.alert('Consumo guardado', message);
+        return;
+      }
+
+      await confirmAdditionalIntakeOnBackend({
+        id_consumo_adicional: registration.id_consumo_adicional,
+        estimate: {
+          ...estimate,
+          calories: finalCalories,
+        },
+        calories: finalCalories,
+      });
+      setBalanceDashboard(await refreshCalorieControlDashboard(intakeDate ?? selectedDate));
+      setEstimate(null);
+      setSelectedImageUri(null);
+      setUploadedImageUrl(null);
+      setMealDescription('');
+      const savedDate = intakeDate ?? selectedDate ?? formatLocalIsoDate();
+      openWeightModal({
+        variant: 'info',
+        title: 'Comida registrada',
+        message: `El consumo quedó guardado y sumado al total diario.\n\nFecha: ${savedDate}\nCalorías: ${Math.round(finalCalories)} kcal`,
+        primaryLabel: 'Entendido',
+      });
+    } catch (error: any) {
+      const status = typeof error?.status === 'number' ? error.status : undefined;
+      const backendMessage =
+        typeof error?.backendData?.error?.message === 'string'
+          ? error.backendData.error.message
+          : typeof error?.message === 'string'
+            ? error.message
+            : undefined;
+      const backendCode = typeof error?.backendData?.error?.code === 'string' ? error.backendData.error.code : undefined;
+
+      if (__DEV__) {
+        console.log('[ui][additional-intake][error]', {
+          status,
+          message: backendMessage,
+          code: backendCode,
+          backendData: error?.backendData,
+          responseData: error?.response?.data,
+        });
+      }
+
+      if (status === 422 && backendCode === 'BUSINESS_RULE_VIOLATION') {
+        setEstimate(null);
+        setSelectedImageUri(null);
+        setUploadedImageUrl(null);
+        setMealDescription('');
+        openWeightModal({
+          variant: 'info',
+          title: 'Consumo guardado',
+          message: backendMessage ?? 'Se guardó la comida, pero no se puede confirmar porque es de un día anterior.',
+          primaryLabel: 'Entendido',
+        });
+        return;
+      }
+
+      Alert.alert('Error', backendMessage ?? 'No pudimos registrar esta comida.');
+    } finally {
+      setConfirmingMeal(false);
+    }
+  };
+
+  if (loading || !legacyDashboard || !balanceDashboard) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top']}>
         <View style={styles.loadingWrapper}>
@@ -353,9 +706,7 @@ export default function ControlCaloricoScreen() {
 
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <MaterialCommunityIcons name="arrow-left" size={24} color="#0f1115" />
-            </TouchableOpacity>
+            <BackButton />
 
             <View style={styles.headerTitleWrap}>
               <Text style={styles.title}>Control Calorico</Text>
@@ -398,7 +749,7 @@ export default function ControlCaloricoScreen() {
                   style={{ backgroundColor: '#fcfaf6', borderWidth: 1.5, borderColor: '#ece7dd', height: 48, borderRadius: 14, textAlign: 'center', fontSize: 20, fontWeight: '800', color: '#11141b' }}
                   value={weightInput}
                   onChangeText={setWeightInput}
-                  placeholder="00.0"
+                  placeholder="--"
                   placeholderTextColor="#d3cbc1"
                   keyboardType="decimal-pad"
                   maxLength={5}
@@ -423,7 +774,7 @@ export default function ControlCaloricoScreen() {
             <View style={{ marginBottom: 20 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 }}>
                  <View>
-                   <Text style={{ fontSize: 42, fontWeight: '900', color: '#08253a', lineHeight: 46 }}>{Math.max(0, dailyTarget - (dashboard?.consumedCalories ?? 0))}</Text>
+                   <Text style={{ fontSize: 42, fontWeight: '900', color: '#08253a', lineHeight: 46 }}>{Math.max(0, dailyTarget - (balanceDashboard?.balance?.consumedCalories ?? 0))}</Text>
                    <Text style={{ fontSize: 13, color: '#8b8378', fontWeight: '700' }}>Kcal Restantes</Text>
                  </View>
                  <View style={{ alignItems: 'flex-end', paddingBottom: 4 }}>
@@ -432,19 +783,25 @@ export default function ControlCaloricoScreen() {
               </View>
               
               <View style={{ height: 14, backgroundColor: '#f0ece3', borderRadius: 7, overflow: 'hidden', flexDirection: 'row' }}>
-                  <View style={{ width: `${Math.min(((dashboard?.consumedCalories ?? 0) / (dailyTarget || 1)) * 100, 100)}%`, backgroundColor: '#1aa44f', height: '100%' }} />
+                  <View
+                    style={{
+                      width: `${Math.min(((balanceDashboard?.balance?.consumedCalories ?? 0) / (dailyTarget || 1)) * 100, 100)}%`,
+                      backgroundColor: (balanceDashboard?.balance?.consumedCalories ?? 0) > dailyTarget ? '#ef4444' : '#1aa44f',
+                      height: '100%',
+                    }}
+                  />
               </View>
-              <Text style={{ fontSize: 12, color: '#f5a623', fontWeight: '700', marginTop: 8, textAlign: 'right' }}>
-                 🔥 {dashboard?.consumedCalories ?? 0} consumidas
+              <Text style={{ fontSize: 12, color: (balanceDashboard?.balance?.consumedCalories ?? 0) > dailyTarget ? '#ef4444' : '#f5a623', fontWeight: '700', marginTop: 8, textAlign: 'right' }}>
+                 🔥 {balanceDashboard?.balance?.consumedCalories ?? 0} consumidas
               </Text>
             </View>
 
             {/* Bottom Row: Macros */}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderColor: '#f0ece3', paddingTop: 16 }}>
               {[
-                { label: 'Prot', percent: userEval?.distribucion_proteinas_pct ? parseInt(userEval.distribucion_proteinas_pct, 10) : (dashboard?.macros?.find((m: any) => m.key==='protein')?.percent ?? 35), color: '#34c759' },
-                { label: 'Carbs', percent: userEval?.distribucion_carbohidratos_pct ? parseInt(userEval.distribucion_carbohidratos_pct, 10) : (dashboard?.macros?.find((m: any) => m.key==='carbs')?.percent ?? 40), color: '#ff3b30' },
-                { label: 'Grasas', percent: userEval?.distribucion_grasas_pct ? parseInt(userEval.distribucion_grasas_pct, 10) : (dashboard?.macros?.find((m: any) => m.key==='fat')?.percent ?? 25), color: '#eab308' },
+                { label: 'Prot', percent: userEval?.distribucion_proteinas_pct ? parseInt(userEval.distribucion_proteinas_pct, 10) : (legacyDashboard?.macros?.find((m) => m.key === 'protein')?.percent ?? 35), color: '#34c759' },
+                { label: 'Carbs', percent: userEval?.distribucion_carbohidratos_pct ? parseInt(userEval.distribucion_carbohidratos_pct, 10) : (legacyDashboard?.macros?.find((m) => m.key === 'carbs')?.percent ?? 40), color: '#ff3b30' },
+                { label: 'Grasas', percent: userEval?.distribucion_grasas_pct ? parseInt(userEval.distribucion_grasas_pct, 10) : (legacyDashboard?.macros?.find((m) => m.key === 'fat')?.percent ?? 25), color: '#eab308' },
               ].map((macro) => (
                 <View key={macro.label} style={{ flex: 1, paddingHorizontal: 6 }}>
                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -466,7 +823,7 @@ export default function ControlCaloricoScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.sectionTitle}>Cuenta tus calorias</Text>
                 <Text style={styles.sectionNote}>
-                  Toma o sube una foto, agrega una descripcion opcional y presiona Calcular.
+                    Toma o sube una foto, agrega una descripcion opcional y revisa la estimacion.
                 </Text>
               </View>
               <View style={styles.scanIconBadge}>
@@ -508,10 +865,10 @@ export default function ControlCaloricoScreen() {
                 </View>
 
                 {/* Campo de descripcion */}
-                <View style={[styles.descriptionCard, { marginTop: 12 }]}>
+                <View style={[styles.descriptionCard, { marginTop: 12 }]}> 
                   <View style={styles.descriptionHeader}>
                     <MaterialCommunityIcons name="text-short" size={18} color="#8e8579" />
-                    <Text style={styles.descriptionTitle}>Descripci\u00f3n (opcional)</Text>
+                    <Text style={styles.descriptionTitle}>Describe la comida</Text>
                   </View>
                   <TextInput
                     value={mealDescription}
@@ -527,18 +884,17 @@ export default function ControlCaloricoScreen() {
                   </Text>
                 </View>
 
-                {/* Boton Calcular */}
-                <TouchableOpacity style={styles.calcMainButton} onPress={() => void handleCalculate()} activeOpacity={0.85}>
-                  <MaterialCommunityIcons name="calculator-variant-outline" size={22} color="#ffffff" />
-                  <Text style={styles.calcMainButtonText}>Calcular calor\u00edas</Text>
-                </TouchableOpacity>
-
                 {/* Cambiar foto */}
                 <TouchableOpacity
                   onPress={() => { setSelectedImageUri(null); setUploadedImageUrl(null); setMealDescription(''); }}
                   style={{ alignItems: 'center', marginTop: 10, paddingVertical: 6 }}
                 >
                   <Text style={{ color: '#9a9389', fontSize: 12, fontWeight: '700' }}>Cambiar foto</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.calcMainButton} onPress={() => void handleCalculate()} activeOpacity={0.85}>
+                  <MaterialCommunityIcons name="calculator-variant-outline" size={22} color="#ffffff" />
+                  <Text style={styles.calcMainButtonText}>Calcular calorías</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -548,7 +904,7 @@ export default function ControlCaloricoScreen() {
               <View style={styles.analysisCard}>
                 <ActivityIndicator size="small" color="#f97316" />
                 <Text style={styles.analysisTitle}>Analizando comida...</Text>
-                <Text style={styles.analysisText}>La IA est\u00e1 estimando calor\u00edas y macros.</Text>
+                <Text style={styles.analysisText}>La IA esta estimando calorías y macros.</Text>
               </View>
             )}
 
@@ -596,24 +952,14 @@ export default function ControlCaloricoScreen() {
 
                   {/* Pills de meta */}
                   <View style={styles.metaGrid}>
-                    {typeof estimate.estimation?.confianza_pct === 'number' && (
-                      <View style={styles.metaPill}>
-                        <MaterialCommunityIcons name="shield-check-outline" size={16} color="#1aa44f" />
-                        <Text style={styles.metaPillText}>Confianza: {Math.round(estimate.estimation.confianza_pct)}%</Text>
-                      </View>
-                    )}
+                    
                     {typeof estimate.estimation?.porcion_estimada_g === 'number' && (
                       <View style={styles.metaPill}>
                         <MaterialCommunityIcons name="scale-bathroom" size={16} color="#8b5cf6" />
-                        <Text style={styles.metaPillText}>Porci\u00f3n: {Math.round(estimate.estimation.porcion_estimada_g)} g</Text>
+                        <Text style={styles.metaPillText}>Porción: {Math.round(estimate.estimation.porcion_estimada_g)} g</Text>
                       </View>
                     )}
-                    {typeof estimate.estimation?.fuente_estimacion === 'string' && (
-                      <View style={styles.metaPill}>
-                        <MaterialCommunityIcons name="robot-outline" size={16} color="#64748b" />
-                        <Text style={styles.metaPillText}>Fuente: {estimate.estimation.fuente_estimacion}</Text>
-                      </View>
-                    )}
+                    
                   </View>
 
                   {/* Input manual si no se pudo estimar */}
@@ -642,11 +988,11 @@ export default function ControlCaloricoScreen() {
                       <Text style={styles.macrosTitle}>Macros</Text>
                       <View style={styles.macrosRowApi}>
                         <View style={styles.macroChip}>
-                          <Text style={styles.macroChipLabel}>Prote\u00ednas</Text>
+                          <Text style={styles.macroChipLabel}>Proteínas</Text>
                           <Text style={styles.macroChipValue}>{Math.round(Number(estimate.estimation.macros.proteinas_g ?? 0))} g</Text>
                         </View>
                         <View style={styles.macroChip}>
-                          <Text style={styles.macroChipLabel}>Carbs</Text>
+                          <Text style={styles.macroChipLabel}>Carbohidrato</Text>
                           <Text style={styles.macroChipValue}>{Math.round(Number(estimate.estimation.macros.carbohidratos_g ?? 0))} g</Text>
                         </View>
                         <View style={styles.macroChip}>
@@ -683,13 +1029,109 @@ export default function ControlCaloricoScreen() {
 
                   {/* Sugerencias de ejercicio */}
                   <Text style={styles.exerciseTitle}>Si decides consumirla, te sugerimos:</Text>
-                  <View style={styles.exerciseChips}>
-                    {estimate.exerciseSuggestions.map((suggestion) => (
-                      <View key={suggestion} style={styles.exerciseChip}>
-                        <Text style={styles.exerciseChipText}>{suggestion}</Text>
-                      </View>
-                    ))}
-                  </View>
+                  {loadingExerciseRecs && (
+                    <View style={{ marginTop: 10, alignItems: 'center' }}>
+                      <ActivityIndicator size="small" color="#1aa44f" />
+                      <Text style={{ marginTop: 6, fontSize: 12, color: '#8b8378', fontWeight: '700' }}>
+                        Cargando recomendaciones...
+                      </Text>
+                    </View>
+                  )}
+
+                  {!loadingExerciseRecs && exerciseRecs.length > 0 && (
+                    <View style={styles.exerciseCards}>
+                      {exerciseRecs.map((rec) => {
+                        const isPreferred = rec.preferido === true;
+                        const hasWarning = typeof rec.advertencia_clinica === 'string' && rec.advertencia_clinica.trim().length > 0;
+                        return (
+                          <View
+                            key={`rec-${String(rec.id_ejercicio)}`}
+                            style={[
+                              styles.exerciseCard,
+                              isPreferred && styles.exerciseCardPreferred,
+                            ]}
+                          >
+                            <View style={styles.exerciseCardHeader}>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.exerciseCardName}>{rec.nombre}</Text>
+                                <Text style={styles.exerciseCardMeta}>
+                                  {rec.minutos_sugeridos} minutos — quema ~{rec.calorias_quemadas_estimadas} kcal
+                                </Text>
+                                {isPreferred && (
+                                  <Text style={styles.exercisePreferredHint}>¡Relacionado con tus gustos!</Text>
+                                )}
+                              </View>
+
+                              <TouchableOpacity
+                                style={[
+                                  styles.exerciseDoneBtn,
+                                  savingExerciseId === rec.id_ejercicio && { opacity: 0.7 },
+                                ]}
+                                disabled={savingExerciseId !== null}
+                                activeOpacity={0.85}
+                                onPress={async () => {
+                                  try {
+                                    setSavingExerciseId(rec.id_ejercicio);
+                                    await postExerciseTracking({
+                                      id_ejercicio: rec.id_ejercicio,
+                                      fecha: selectedDate,
+                                      completado: true,
+                                      hora_registro: formatLocalTimeHHmm(),
+                                    });
+                                    openWeightModal({
+                                      variant: 'info',
+                                      title: 'Ejercicio registrado',
+                                      message: `Quedó guardado en tu bitácora.\n\nEjercicio: ${rec.nombre}\nFecha: ${selectedDate}\nDuración: ${rec.minutos_sugeridos} min`,
+                                      primaryLabel: 'Entendido',
+                                    });
+                                  } catch (err) {
+                                    openWeightModal({
+                                      variant: 'error',
+                                      title: 'Error',
+                                      message: 'No pudimos registrar el ejercicio. Intenta de nuevo.',
+                                      primaryLabel: 'OK',
+                                    });
+                                  } finally {
+                                    setSavingExerciseId(null);
+                                  }
+                                }}
+                              >
+                                {savingExerciseId === rec.id_ejercicio
+                                  ? <ActivityIndicator size="small" color="#ffffff" />
+                                  : <MaterialCommunityIcons name="check" size={16} color="#ffffff" />
+                                }
+                              </TouchableOpacity>
+                            </View>
+
+                            {hasWarning && (
+                              <View style={styles.exerciseWarningRow}>
+                                <MaterialCommunityIcons name="alert-circle-outline" size={16} color="#f97316" />
+                                <Text style={styles.exerciseWarningText}>{rec.advertencia_clinica}</Text>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+
+                  {!loadingExerciseRecs && exerciseRecs.length === 0 && (
+                    <View style={styles.exerciseChips}>
+                      {(estimate.exerciseSuggestions ?? []).map((suggestion) => (
+                        <View key={suggestion} style={styles.exerciseChip}>
+                          <Text style={styles.exerciseChipText}>{suggestion}</Text>
+                        </View>
+                      ))}
+                      {exerciseRecsError && (
+                        <Text style={{ marginTop: 10, fontSize: 12, color: '#b45309', fontWeight: '800' }}>
+                          {exerciseRecsError}
+                        </Text>
+                      )}
+                      <Text style={{ marginTop: 10, fontSize: 12, color: '#8b8378', fontWeight: '700' }}>
+                        Completa tu perfil médico en Datos Médicos para recibir recomendaciones personalizadas.
+                      </Text>
+                    </View>
+                  )}
 
                   {/* Acciones */}
                   <View style={styles.estimateButtons}>
@@ -703,7 +1145,7 @@ export default function ControlCaloricoScreen() {
                       }}
                     >
                       <View style={styles.decisionContent}>
-                        <Text style={styles.decisionEmoji}>\u2715</Text>
+                        <Text style={styles.decisionEmoji}></Text>
                         <Text style={styles.secondaryButtonText}>Descartar</Text>
                       </View>
                     </TouchableOpacity>
@@ -715,7 +1157,7 @@ export default function ControlCaloricoScreen() {
                       <View style={styles.decisionContent}>
                         {confirmingMeal
                           ? <ActivityIndicator size="small" color="#ffffff" />
-                          : <Text style={styles.decisionEmoji}>\u2713</Text>
+                          : <Text style={styles.decisionEmoji}></Text>
                         }
                         <Text style={styles.primaryButtonText}>{confirmingMeal ? 'Guardando...' : 'Registrar'}</Text>
                       </View>
@@ -728,6 +1170,58 @@ export default function ControlCaloricoScreen() {
 
 
         </ScrollView>
+
+        <Modal
+          visible={weightModal.visible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeWeightModal}
+        >
+          <Pressable style={styles.weightModalOverlay} onPress={weightModal.variant === 'confirm' ? undefined : closeWeightModal}>
+            <Pressable style={styles.weightModalCard} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.weightModalHeader}>
+                <Text style={styles.weightModalTitle}>{weightModal.title}</Text>
+              </View>
+
+              <Text style={styles.weightModalMessage}>{weightModal.message}</Text>
+
+              <View style={styles.weightModalActions}>
+                {weightModal.variant === 'confirm' && (
+                  <TouchableOpacity
+                    style={[styles.weightModalBtn, styles.weightModalBtnGhost]}
+                    onPress={closeWeightModal}
+                    disabled={savingWeight}
+                    activeOpacity={0.9}
+                  >
+                    <Text style={styles.weightModalBtnGhostText}>{weightModal.secondaryLabel ?? 'Cancelar'}</Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={[
+                    styles.weightModalBtn,
+                    weightModal.variant === 'error' ? styles.weightModalBtnDanger : styles.weightModalBtnPrimary,
+                    savingWeight && { opacity: 0.75 },
+                  ]}
+                  onPress={() => {
+                    if (weightModal.variant === 'confirm' && pendingWeightConfirm) {
+                      closeWeightModal();
+                      void pendingWeightConfirm();
+                      return;
+                    }
+                    closeWeightModal();
+                  }}
+                  disabled={savingWeight}
+                  activeOpacity={0.9}
+                >
+                  <Text style={styles.weightModalBtnPrimaryText}>
+                    {savingWeight ? '...' : (weightModal.primaryLabel ?? (weightModal.variant === 'confirm' ? 'Confirmar' : 'OK'))}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
 
         <BottomNav />
       </View>
@@ -768,16 +1262,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-  },
-  backButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#efe8df',
   },
   headerTitleWrap: {
     flex: 1,
@@ -1297,6 +1781,70 @@ const styles = StyleSheet.create({
     color: '#1c7f49',
     fontWeight: '700',
   },
+  exerciseCards: {
+    marginTop: 10,
+    gap: 10,
+  },
+  exerciseCard: {
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e8e4dd',
+    padding: 12,
+  },
+  exerciseCardPreferred: {
+    borderColor: '#22c55e',
+    backgroundColor: '#f0fdf4',
+  },
+  exerciseCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  exerciseCardName: {
+    fontSize: 13,
+    color: '#11141b',
+    fontWeight: '900',
+  },
+  exerciseCardMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#8b8378',
+    fontWeight: '700',
+  },
+  exercisePreferredHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#15803d',
+    fontWeight: '800',
+  },
+  exerciseDoneBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#1aa44f',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 'auto',
+  },
+  exerciseWarningRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#fff7ed',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    padding: 10,
+    borderRadius: 14,
+  },
+  exerciseWarningText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#7c2d12',
+    fontWeight: '700',
+  },
   estimateButtons: {
     flexDirection: 'row',
     gap: 10,
@@ -1784,5 +2332,74 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '800',
     letterSpacing: 0.5,
+  },
+
+  weightModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 17, 21, 0.42)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  weightModalCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#efe6da',
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  weightModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  weightModalTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#08253a',
+  },
+  weightModalMessage: {
+    marginTop: 10,
+    color: '#5f564d',
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  weightModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 16,
+  },
+  weightModalBtn: {
+    minWidth: 110,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  weightModalBtnGhost: {
+    backgroundColor: '#f7f3ee',
+    borderWidth: 1,
+    borderColor: '#efe6da',
+  },
+  weightModalBtnGhostText: {
+    color: '#6d6258',
+    fontWeight: '900',
+  },
+  weightModalBtnPrimary: {
+    backgroundColor: '#111827',
+  },
+  weightModalBtnDanger: {
+    backgroundColor: '#dc2626',
+  },
+  weightModalBtnPrimaryText: {
+    color: '#ffffff',
+    fontWeight: '900',
   },
 });

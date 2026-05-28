@@ -1,16 +1,234 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { apiClient } from '@/services/api.client';
+import { fetchActiveNutritionPlanPayload, fetchNutritionPlanWeeks, type NutritionPlanDayApi, type NutritionPlanMenuApi, type NutritionPlanWeekApi } from '@/services/nutrition-plan.service';
 import {
   applyTrackedMeal,
   removeTrackedMeal,
   setDailyCalorieTarget,
 } from '@/services/calorie.service';
+import { fetchCalorieControlDashboard } from '@/services/calorie-control.service';
 import { authStore } from '@/store/auth.store';
 
 type MacroImpact = {
   protein: number;
   carbs: number;
   fat: number;
+};
+
+type ApiMealTrackingStatus = 'pendiente' | 'realizada' | 'no_realizada' | 'realizado' | 'completada' | 'saltada' | 'skip' | 'done';
+
+export type TodayMealItem = {
+  id: string;
+  menuTrackingId: string;
+  dishId?: string;
+  slot: string;
+  title: string;
+  calories: number;
+  emoji: string;
+  status: 'done' | 'skip' | 'pending';
+  statusLabel: string;
+  summary?: string;
+};
+
+export type TodayMealPlan = {
+  days: TodayMealDay[];
+  selectedDayId: string;
+  meals: TodayMealItem[];
+  completedMeals: number;
+  totalMeals: number;
+  progressPct: number;
+  summary: string[];
+  updatedAt?: string;
+};
+
+export type TodayMealDay = {
+  id: string;
+  date?: string;
+  label: string;
+  shortLabel: string;
+  meals: TodayMealItem[];
+  completedMeals: number;
+  totalMeals: number;
+  progressPct: number;
+};
+
+function overlayMealTrackingStatus(plan: TodayMealPlan, tracking: TodayMealPlan): TodayMealPlan {
+  const labelForStatus = (status: TodayMealItem['status']) =>
+    status === 'done' ? 'Realizada' : status === 'skip' ? 'No realizada' : 'Pendiente';
+
+  const trackingMeals = tracking.days
+    .flatMap((day) => day.meals)
+    .filter((meal) => typeof meal.menuTrackingId !== 'undefined' && String(meal.menuTrackingId).trim().length > 0);
+
+  const statusByTrackingId = trackingMeals.reduce<Record<string, TodayMealItem['status']>>((acc, meal) => {
+      acc[String(meal.menuTrackingId)] = meal.status;
+      return acc;
+    }, {});
+
+  if (__DEV__) {
+    const keys = Object.keys(statusByTrackingId);
+    console.log('[plan][overlay-tracking] map', {
+      trackingKeys: keys.slice(0, 20),
+      trackingCount: keys.length,
+      sampleTracking: trackingMeals.slice(0, 3).map((m) => ({ id: m.id, menuTrackingId: m.menuTrackingId, status: m.status })),
+      planSample: plan.meals.slice(0, 3).map((m) => ({ id: m.id, menuTrackingId: m.menuTrackingId, status: m.status })),
+    });
+  }
+
+  const patchMeals = (meals: TodayMealItem[]) =>
+    meals.map((meal) => {
+      const trackingKey = String(meal.menuTrackingId);
+      const nextStatus = statusByTrackingId[trackingKey];
+      if (!nextStatus) {
+        if (__DEV__) {
+          // Solo loguear casos sospechosos donde el plan viene "pending" pero podrÃ­a tener tracking.
+          if (trackingKey && meal.status !== 'pending' && statusByTrackingId[trackingKey] === undefined) {
+            console.log('[plan][overlay-tracking] missing key', { trackingKey });
+          }
+        }
+        return meal;
+      }
+      return nextStatus === meal.status ? meal : { ...meal, status: nextStatus, statusLabel: labelForStatus(nextStatus) };
+    });
+
+  const nextDays = plan.days.map((day) => {
+    const nextMeals = patchMeals(day.meals);
+    const completedMeals = nextMeals.filter((meal) => meal.status === 'done').length;
+    const totalMeals = nextMeals.length;
+    return {
+      ...day,
+      meals: nextMeals,
+      completedMeals,
+      totalMeals,
+      progressPct: totalMeals > 0 ? Math.round((completedMeals / totalMeals) * 100) : 0,
+    };
+  });
+
+  const nextMeals = patchMeals(plan.meals);
+  const completedMeals = nextMeals.filter((meal) => meal.status === 'done').length;
+  const totalMeals = nextMeals.length;
+
+  return {
+    ...plan,
+    days: nextDays,
+    meals: nextMeals,
+    completedMeals,
+    totalMeals,
+    progressPct: totalMeals > 0 ? Math.round((completedMeals / totalMeals) * 100) : 0,
+  };
+}
+
+function overlayMealTrackingStatusMap(plan: TodayMealPlan, statusByTrackingId: Record<string, TodayMealItem['status']>): TodayMealPlan {
+  const labelForStatus = (status: TodayMealItem['status']) =>
+    status === 'done' ? 'Realizada' : status === 'skip' ? 'No realizada' : 'Pendiente';
+
+  const patchMeals = (meals: TodayMealItem[]) =>
+    meals.map((meal) => {
+      const trackingKey = String(meal.menuTrackingId);
+      const nextStatus = statusByTrackingId[trackingKey];
+      if (!nextStatus) return meal;
+      return nextStatus === meal.status ? meal : { ...meal, status: nextStatus, statusLabel: labelForStatus(nextStatus) };
+    });
+
+  const nextDays = plan.days.map((day) => {
+    const nextMeals = patchMeals(day.meals);
+    const completedMeals = nextMeals.filter((meal) => meal.status === 'done').length;
+    const totalMeals = nextMeals.length;
+    return {
+      ...day,
+      meals: nextMeals,
+      completedMeals,
+      totalMeals,
+      progressPct: totalMeals > 0 ? Math.round((completedMeals / totalMeals) * 100) : 0,
+    };
+  });
+
+  const nextMeals = patchMeals(plan.meals);
+  const completedMeals = nextMeals.filter((meal) => meal.status === 'done').length;
+  const totalMeals = nextMeals.length;
+
+  return {
+    ...plan,
+    days: nextDays,
+    meals: nextMeals,
+    completedMeals,
+    totalMeals,
+    progressPct: totalMeals > 0 ? Math.round((completedMeals / totalMeals) * 100) : 0,
+  };
+}
+
+function getLocalIsoDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function coerceToLocalIsoDateString(input: unknown): string | undefined {
+  if (typeof input !== 'string') return undefined;
+  const raw = input.trim();
+  if (!raw) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = new Date(raw);
+  if (!Number.isFinite(parsed.getTime())) return undefined;
+  return getLocalIsoDate(parsed);
+}
+
+async function fetchMealTrackingStatusMapFromDashboard(dateIso: string) {
+  const dashboard = await fetchCalorieControlDashboard(dateIso);
+  const map: Record<string, TodayMealItem['status']> = {};
+  for (const meal of dashboard.meals ?? []) {
+    const id = (meal as any)?.id_menu_diario ?? (meal as any)?.menuTrackingId ?? (meal as any)?.id;
+    const trackingId = typeof id === 'undefined' ? '' : String(id);
+    if (!trackingId) continue;
+    const status = normalizeMealTrackingStatus(undefined, (meal as any)?.realizado, (meal as any)?.hora_registro);
+    map[trackingId] = status;
+  }
+  return map;
+}
+
+type WeeklyMealMenuApi = {
+  id_menu_diario?: number | string;
+  id_tiempo_comida?: number | string;
+  tiempo_comida?: string;
+  id_plato?: number | string;
+  nombre_plato?: string;
+  calorias_aportadas?: number | string;
+  estado?: string;
+  realizado?: boolean;
+  summary?: string;
+  resumen?: string;
+  emoji?: string;
+  [key: string]: unknown;
+};
+
+type WeeklyMealDayApi = {
+  id_dia_plan?: number | string;
+  dia_semana?: string;
+  fecha?: string;
+  menus?: WeeklyMealMenuApi[];
+  [key: string]: unknown;
+};
+
+type WeeklyMealWeekApi = {
+  id_semana?: number | string;
+  numero?: number | string;
+  fecha_inicio_semana?: string;
+  fecha_fin_semana?: string;
+  dias?: WeeklyMealDayApi[];
+  semanas?: WeeklyMealWeekApi[];
+  [key: string]: unknown;
+};
+
+export type DishDetails = {
+  id: string;
+  title: string;
+  calories: number;
+  ingredients: string[];
+  preparation: string[];
+  recipe: string;
+  emoji: string;
 };
 
 type MealSlot = 'Desayuno' | 'Media Manana' | 'Almuerzo' | 'Media Tarde' | 'Cena';
@@ -461,6 +679,513 @@ function normalizeText(value: string) {
     .trim();
 }
 
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function getFirstObject(value: unknown, keys: string[]): Record<string, unknown> | null {
+  const objectValue = asObject(value);
+  if (!objectValue) return null;
+
+  for (const key of keys) {
+    const nested = objectValue[key];
+    const nestedObject = asObject(nested);
+    if (nestedObject) return nestedObject;
+  }
+
+  return objectValue;
+}
+
+function getArrayCandidate(value: unknown, keys: string[]): unknown[] {
+  if (Array.isArray(value)) return value;
+  const objectValue = asObject(value);
+  if (!objectValue) return [];
+
+  for (const key of keys) {
+    const nested = objectValue[key];
+    if (Array.isArray(nested)) return nested;
+  }
+
+  return [];
+}
+
+function collectArraysDeep(value: unknown, seen = new WeakSet<object>()): unknown[][] {
+  if (Array.isArray(value)) {
+    return [value, ...value.flatMap((item) => collectArraysDeep(item, seen))];
+  }
+
+  const objectValue = asObject(value);
+  if (!objectValue) return [];
+
+  if (seen.has(objectValue)) return [];
+  seen.add(objectValue);
+
+  const nestedArrays: unknown[][] = [];
+  Object.values(objectValue).forEach((nested) => {
+    if (Array.isArray(nested)) {
+      nestedArrays.push(nested);
+      nestedArrays.push(...nested.flatMap((item) => collectArraysDeep(item, seen)));
+    } else if (nested && typeof nested === 'object') {
+      nestedArrays.push(...collectArraysDeep(nested, seen));
+    }
+  });
+
+  return nestedArrays;
+}
+
+function isMealLikeObject(value: unknown): value is Record<string, unknown> {
+  const record = asObject(value);
+  if (!record) return false;
+
+  const keyNames = Object.keys(record).map(normalizeText);
+  return (
+    keyNames.some((key) => ['comida', 'slot', 'title', 'nombre', 'caloria', 'calories', 'estado', 'realizado', 'plato', 'menu'].some((hint) => key.includes(hint))) ||
+    typeof record.id_menu_diario !== 'undefined' ||
+    typeof record.id_plato !== 'undefined' ||
+    typeof record.realizado !== 'undefined'
+  );
+}
+
+function pickBestMealArray(input: unknown): unknown[] {
+  const candidates: unknown[][] = [];
+
+  const direct = asObject(input);
+  if (Array.isArray(input)) {
+    candidates.push(input);
+  }
+
+  if (direct) {
+    ['data', 'result', 'payload', 'meals', 'comidas', 'items', 'menus', 'menu_diario', 'platos', 'seguimiento_comidas', 'tracking', 'records'].forEach((key) => {
+      const nested = direct[key];
+      if (Array.isArray(nested)) {
+        candidates.push(nested);
+      }
+    });
+  }
+
+  candidates.push(...collectArraysDeep(input));
+
+  const scored = candidates
+    .filter((candidate) => candidate.length > 0)
+    .map((candidate) => {
+      const objects = candidate.filter(isMealLikeObject).length;
+      const withStatus = candidate.filter((item) => {
+        const record = asObject(item);
+        return Boolean(record && (record.estado || record.status || typeof record.realizado !== 'undefined'));
+      }).length;
+      const withCalories = candidate.filter((item) => {
+        const record = asObject(item);
+        return Boolean(record && (typeof record.calorias !== 'undefined' || typeof record.calories !== 'undefined' || typeof record.kcal !== 'undefined'));
+      }).length;
+
+      return {
+        candidate,
+        score: objects * 4 + withStatus * 3 + withCalories * 2 + candidate.length,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return scored[0]?.candidate ?? [];
+}
+
+function toText(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : fallback;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return fallback;
+}
+
+function toNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value.replace(',', '.'));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function normalizeMealTrackingStatus(
+  rawStatus: unknown,
+  realizedFlag?: unknown,
+  registeredTime?: unknown,
+): TodayMealItem['status'] {
+  const hasRegisteredTime = typeof registeredTime === 'string' && registeredTime.trim().length > 0;
+
+  // Regla de negocio del tracking:
+  // - `realizado === true` => hecho (✓)
+  // - `realizado === false` + `hora_registro` => marcado como no realizado (✗)
+  // - `realizado === false` + sin `hora_registro` => aÃºn pendiente (no marcado)
+  if (typeof realizedFlag === 'boolean') {
+    if (realizedFlag) return 'done';
+    return hasRegisteredTime ? 'skip' : 'pending';
+  }
+
+  const status = normalizeText(typeof rawStatus === 'string' ? rawStatus : '');
+  if (!status) return hasRegisteredTime ? 'skip' : 'pending';
+  if (status.includes('pend')) return 'pending';
+  if (status.includes('no_real') || status.includes('no real') || status.includes('salt') || status.includes('skip')) return 'skip';
+  if (status.includes('realiz') || status.includes('real') || status.includes('compl') || status === 'done') return 'done';
+  return hasRegisteredTime ? 'skip' : 'pending';
+}
+
+function slotFromMealLabel(value: unknown, fallbackIndex = 0): string {
+  const normalized = normalizeText(toText(value));
+  if (normalized.includes('desay')) return 'Desayuno';
+  if (normalized.includes('media manana') || normalized.includes('media mañana')) return 'Media Mañana';
+  if (normalized.includes('almuer')) return 'Almuerzo';
+  if (normalized.includes('media tarde')) return 'Media Tarde';
+  if (normalized.includes('cena')) return 'Cena';
+
+  const slotMap = ['Desayuno', 'Media Mañana', 'Almuerzo', 'Media Tarde', 'Cena'];
+  return slotMap[fallbackIndex] ?? 'Comida';
+}
+
+function emojiForSlot(slot: string): string {
+  const normalized = normalizeText(slot);
+  if (normalized.includes('desay')) return '🍳';
+  if (normalized.includes('media manana') || normalized.includes('media mañana')) return '🥛';
+  if (normalized.includes('almuer')) return '🍽️';
+  if (normalized.includes('media tarde')) return '🍏';
+  if (normalized.includes('cena')) return '🌙';
+  return '🍽️';
+}
+
+function normalizeArrayOfStrings(value: unknown): string[] {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return [];
+    // Permitir que el backend envíe la preparación como string único o multilinea.
+    const lines = trimmed
+      .split(/\r?\n/g)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const splitByPunctuation = (text: string) =>
+      text
+        .split(/(?:;\s+)|(?<=[a-zÃ¡Ã©Ã­Ã³ÃºÃ±])\.\s+/gi)
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+    const numbered = lines.flatMap((line) => {
+      const matches = [...line.matchAll(/(?:^|\s)(\d+)\.\s*([^]+?)(?=(?:\s+\d+\.\s*)|$)/g)];
+      if (matches.length === 0) return [line];
+      return matches.map((m) => `${m[1]}. ${m[2]}`.trim()).filter(Boolean);
+    });
+
+    const parts = numbered.length > 1
+      ? numbered
+      : splitByPunctuation(numbered[0] ?? trimmed);
+
+    return parts.length > 0 ? parts : [trimmed];
+  }
+
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      if (item && typeof item === 'object') {
+        const record = item as Record<string, unknown>;
+        return toText(record.nombre ?? record.name ?? record.title ?? record.descripcion ?? record.descripcion_paso ?? record.instruction ?? record.step);
+      }
+      return '';
+    })
+    .filter(Boolean);
+}
+
+function normalizeTodayMealItem(item: unknown, index: number): TodayMealItem {
+  const record = asObject(item) ?? {};
+  const menuTrackingId = toText(
+    record.id_menu_diario ?? record.idSeguimiento ?? record.id_seguimiento_comida ?? record.id_tracking ?? record.id ?? record.meal_tracking_id,
+    `meal-${index + 1}`,
+  );
+  const dishId = toText(record.id_plato ?? record.idPlato ?? record.dish_id ?? record.plato_id ?? record.id_dish, '');
+  const slot = slotFromMealLabel(record.slot ?? record.comida ?? record.nombre_comida ?? record.meal_slot ?? record.turno, index);
+  const title = toText(record.nombre_plato ?? record.nombre ?? record.title ?? record.plato ?? record.meal_name, slot);
+  const calories = toNumber(record.calorias ?? record.calories ?? record.kcal ?? record.total_calories ?? record.valor_calorias, 0);
+  const status = normalizeMealTrackingStatus(
+    record.estado ?? record.status ?? record.realizado ?? record.completed,
+    record.realizado,
+    record.hora_registro ?? record.horaRegistro ?? record.registered_time,
+  );
+  const summary = toText(record.resumen ?? record.summary ?? record.descripcion ?? record.descripcion_corta, '');
+
+  return {
+    id: menuTrackingId,
+    menuTrackingId,
+    dishId: dishId || undefined,
+    slot,
+    title,
+    calories: Math.max(0, Math.round(calories)),
+    emoji: toText(record.emoji, emojiForSlot(slot)),
+    status,
+    statusLabel: status === 'done' ? 'Realizada' : status === 'skip' ? 'No realizada' : 'Pendiente',
+    summary: summary || undefined,
+  };
+}
+
+function normalizeTodayMealFromMenu(menu: WeeklyMealMenuApi, index: number): TodayMealItem {
+  const nestedDish = (menu as any)?.plato ?? (menu as any)?.dish ?? (menu as any)?.plato_detalle ?? undefined;
+  const slotLabel = (menu as any)?.nombre_tiempo ?? (menu as any)?.tiempo_comida ?? (menu as any)?.slot;
+  const slot = slotFromMealLabel(slotLabel, index);
+  const calories = toNumber(menu.calorias_aportadas, 0);
+  const menuTrackingId = toText((menu as any)?.menuTrackingId ?? menu.id_menu_diario ?? (menu as any)?.id_menu, `meal-${index + 1}`);
+  const dishId = toText(
+    (menu as any)?.dishId ??
+      (menu as any)?.id_plato ??
+      (menu as any)?.idPlato ??
+      (menu as any)?.dish_id ??
+      (menu as any)?.id_dish ??
+      nestedDish?.id_plato ??
+      nestedDish?.id ??
+      (nestedDish as any)?.dishId ??
+      (nestedDish as any)?.idPlato,
+    '',
+  );
+
+  if (__DEV__ && (!dishId || menuTrackingId.startsWith('meal-'))) {
+    console.log('[plan][today][menu] suspicious ids', {
+      index,
+      slotLabel,
+      menuTrackingId,
+      dishId,
+      raw: {
+        id_menu_diario: (menu as any)?.id_menu_diario,
+        menuTrackingId: (menu as any)?.menuTrackingId,
+        id_plato: (menu as any)?.id_plato,
+        dishId: (menu as any)?.dishId,
+        idPlato: (menu as any)?.idPlato,
+        dish_id: (menu as any)?.dish_id,
+        nombre_tiempo: (menu as any)?.nombre_tiempo,
+      },
+    });
+  }
+
+  const status = normalizeMealTrackingStatus(
+    (menu as any).estado ?? undefined,
+    (menu as any).realizado,
+    (menu as any).hora_registro ?? (menu as any).horaRegistro ?? (menu as any).registered_time,
+  );
+
+  return {
+    id: menuTrackingId,
+    menuTrackingId,
+    dishId: dishId || undefined,
+    slot,
+    title: toText(menu.nombre_plato ?? nestedDish?.nombre_plato ?? nestedDish?.nombre ?? (menu as any)?.title, slot),
+    calories: Math.max(0, Math.round(calories)),
+    emoji: toText(menu.emoji, emojiForSlot(slot)),
+    status,
+    statusLabel: status === 'done' ? 'Realizada' : status === 'skip' ? 'No realizada' : 'Pendiente',
+    summary: toText(menu.resumen ?? menu.summary, '') || undefined,
+  };
+}
+
+function normalizeMealDayLabel(day: WeeklyMealDayApi, fallbackIndex: number) {
+  const label = toText(day.dia_semana, '');
+  const shortLabel = label
+    ? label.slice(0, 3).toUpperCase()
+    : ['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE'][fallbackIndex] ?? 'DIA';
+
+  return {
+    label: label || `Día ${fallbackIndex + 1}`,
+    shortLabel,
+  };
+}
+
+function normalizeMealDayId(day: WeeklyMealDayApi, fallbackIndex: number) {
+  return toText(
+    day.fecha ?? day.dia_semana ?? day.id_dia_plan ?? day.id ?? '',
+    `day-${fallbackIndex + 1}`,
+  );
+}
+
+function buildTodayMealDay(day: WeeklyMealDayApi, index: number): TodayMealDay {
+  const rawMenus =
+    Array.isArray(day.menus) ? day.menus
+      : Array.isArray((day as any).comidas) ? (day as any).comidas
+        : Array.isArray((day as any).meals) ? (day as any).meals
+          : [];
+  const meals = sortMealsBySlot(rawMenus.map((menu: any, mealIndex: number) => normalizeTodayMealFromMenu(menu, mealIndex)));
+  const completedMeals = meals.filter((meal) => meal.status === 'done').length;
+  const totalMeals = meals.length;
+  const labelParts = normalizeMealDayLabel(day, index);
+
+  return {
+    id: normalizeMealDayId(day, index),
+    date: coerceToLocalIsoDateString((day as any).fecha),
+    label: labelParts.label,
+    shortLabel: labelParts.shortLabel,
+    meals,
+    completedMeals,
+    totalMeals,
+    progressPct: totalMeals > 0 ? Math.round((completedMeals / totalMeals) * 100) : 0,
+  };
+}
+
+function ensureUniqueTodayMealDayIds(days: TodayMealDay[]): TodayMealDay[] {
+  const seen = new Map<string, number>();
+  let hadDuplicates = false;
+
+  const next = days.map((day) => {
+    const base = `${day.id}`;
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    if (count === 0) return day;
+
+    hadDuplicates = true;
+    return {
+      ...day,
+      id: `${base}#${count + 1}`,
+    };
+  });
+
+  if (__DEV__ && hadDuplicates) {
+    const duplicates = Array.from(seen.entries()).filter(([, count]) => count > 1);
+    console.warn('[plan][today] duplicated day ids detected; normalized with suffix', duplicates.slice(0, 10));
+  }
+
+  return next;
+}
+
+function collectTodayMealDays(input: unknown): TodayMealDay[] {
+  const root = asObject(input) ?? {};
+
+  // El backend envuelve respuestas en `data` y a veces vuelve a envolver dentro de `data.data`.
+  let payload: any = root;
+  for (let depth = 0; depth < 3; depth += 1) {
+    const next = asObject(payload?.data);
+    if (!next) break;
+    payload = next;
+  }
+  // Si aÃºn hay una forma `{ success, data: { ... } }`, el loop anterior ya la redujo,
+  // pero si viene como `{ data: { success, data: { ... } } }` necesitamos un unwrap adicional.
+  if (payload && typeof payload === 'object' && 'success' in payload && 'data' in payload) {
+    payload = asObject((payload as any).data) ?? payload;
+  }
+
+  if (__DEV__) {
+    const keys = payload && typeof payload === 'object' ? Object.keys(payload) : [];
+    console.log('[plan][today] payload keys', keys.slice(0, 30));
+  }
+
+  const directDays: unknown[] = Array.isArray(payload.dias) ? (payload.dias as unknown[]) : [];
+  if (directDays.length > 0) {
+    return ensureUniqueTodayMealDayIds(directDays
+      .filter((day): day is WeeklyMealDayApi => Boolean(day) && typeof day === 'object')
+      .map((day, index) => buildTodayMealDay(day, index)));
+  }
+
+  const weeks: unknown[] = Array.isArray(payload.semanas)
+    ? (payload.semanas as unknown[])
+    : Array.isArray(payload.weeks)
+      ? (payload.weeks as unknown[])
+      : Array.isArray(payload.data)
+        ? (payload.data as unknown[])
+        : [];
+
+  const allDays: WeeklyMealDayApi[] = weeks
+    .filter((week): week is WeeklyMealWeekApi => Boolean(week) && typeof week === 'object')
+    .flatMap((week) => (Array.isArray(week.dias) ? week.dias : []).filter((day): day is WeeklyMealDayApi => Boolean(day) && typeof day === 'object'));
+
+  return ensureUniqueTodayMealDayIds(allDays.map((day, index) => buildTodayMealDay(day, index)));
+}
+
+function pickActiveTodayMealDay(days: TodayMealDay[]) {
+  if (days.length === 0) return null;
+
+  const todayIso = (() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = `${now.getMonth() + 1}`.padStart(2, '0');
+    const day = `${now.getDate()}`.padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  })();
+  const todayWeekday = normalizeText(new Date().toLocaleDateString('es-ES', { weekday: 'long' }));
+
+  const byExactDate = days.find((day) => day.date === todayIso);
+  if (byExactDate) return byExactDate;
+
+  const withDate = days.filter((day) => typeof day.date === 'string' && day.date.length >= 10);
+  if (withDate.length > 0) {
+    const today = new Date(`${todayIso}T12:00:00`);
+    const sorted = [...withDate].sort((a, b) => {
+      const timeA = new Date(`${a.date}T12:00:00`).getTime();
+      const timeB = new Date(`${b.date}T12:00:00`).getTime();
+      const diffA = Math.abs(timeA - today.getTime());
+      const diffB = Math.abs(timeB - today.getTime());
+      return diffA - diffB;
+    });
+    return sorted[0] ?? days[0];
+  }
+
+  return (
+    days.find((day) => day.date === todayIso || normalizeText(day.label) === todayWeekday || normalizeText(day.shortLabel) === todayWeekday.slice(0, 3))
+    ?? days[0]
+  );
+}
+
+function statusToRealizado(status: 'done' | 'skip'): boolean {
+  return status === 'done';
+}
+
+function sortMealsBySlot(items: TodayMealItem[]) {
+  const order = ['desayuno', 'media manana', 'media mañana', 'almuerzo', 'media tarde', 'cena'];
+  return [...items].sort((a, b) => {
+    const indexA = order.findIndex((slot) => normalizeText(a.slot).includes(slot));
+    const indexB = order.findIndex((slot) => normalizeText(b.slot).includes(slot));
+    return (indexA === -1 ? 99 : indexA) - (indexB === -1 ? 99 : indexB);
+  });
+}
+
+function extractDishDetails(input: unknown, dishId: string): DishDetails {
+  const source = getFirstObject(input, ['plato', 'data', 'result', 'payload']) ?? asObject(input) ?? {};
+  const ingredients = (() => {
+    const raw = source.ingredientes ?? source.ingredients ?? source.alimentos ?? source.insumos;
+    if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'object') {
+      return raw
+        .map((item: any) => {
+          const name = toText(item?.nombre_alimento ?? item?.nombre ?? item?.name ?? item?.alimento, '');
+          const grams = toNumber(item?.gramos ?? item?.cantidad_g ?? item?.cantidad ?? item?.g, NaN);
+          const kcal = toNumber(item?.calorias ?? item?.kcal ?? item?.calories, NaN);
+          const parts = [
+            name,
+            Number.isFinite(grams) ? `${Math.round(grams)} g` : '',
+            Number.isFinite(kcal) ? `${Math.round(kcal)} kcal` : '',
+          ].filter(Boolean);
+          return parts.join(' · ');
+        })
+        .filter((line: string) => line.trim().length > 0);
+    }
+    return normalizeArrayOfStrings(raw);
+  })();
+  const preparation = normalizeArrayOfStrings(
+    source.pasos_preparacion ??
+      source.modo_preparacion ??
+      source.preparation ??
+      source.preparacion ??
+      source.instructions ??
+      source.steps,
+  );
+  const calories = toNumber(source.calorias ?? source.calories ?? source.kcal ?? source.total_calories, 0);
+  const title = toText(source.nombre_plato ?? source.nombre ?? source.title ?? source.plato, `Plato ${dishId}`);
+  const recipe = toText(source.descripcion_plato ?? source.receta ?? source.recipe ?? source.descripcion ?? source.summary, '');
+  const emoji = toText(source.emoji, '🍽️');
+
+  return {
+    id: dishId,
+    title,
+    calories: Math.max(0, Math.round(calories)),
+    ingredients,
+    preparation,
+    recipe,
+    emoji,
+  };
+}
+
 async function loadPlanState(): Promise<PlanState> {
   const raw = await AsyncStorage.getItem(STORAGE_KEY);
   if (!raw) return DEFAULT_STATE;
@@ -676,6 +1401,306 @@ export async function loadWeeklyPlan(): Promise<WeeklyPlan> {
     activeDayKey: getTodayDayKey(),
     days,
   };
+}
+
+export async function loadTodayMealPlan(): Promise<TodayMealPlan> {
+  const response = await apiClient.get('/meal-tracking/today');
+  const days = collectTodayMealDays(response.data);
+  const activeDay = pickActiveTodayMealDay(days);
+  const meals = activeDay?.meals ?? [];
+  const completedMeals = activeDay?.completedMeals ?? 0;
+  const totalMeals = activeDay?.totalMeals ?? 0;
+  const progressPct = activeDay?.progressPct ?? 0;
+
+  const basePlan: TodayMealPlan = {
+    days,
+    selectedDayId: activeDay?.id ?? days[0]?.id ?? '',
+    meals,
+    completedMeals,
+    totalMeals,
+    progressPct,
+    summary: [
+      `Día activo: ${toText(activeDay?.label ?? '', 'Sin día activo')}`,
+      `Comidas realizadas: ${completedMeals}/${Math.max(totalMeals, 1)}`,
+    ],
+    updatedAt: activeDay?.date,
+  };
+
+  return basePlan;
+}
+
+function buildTodayMealDayFromPlanApi(day: NutritionPlanDayApi, index: number): TodayMealDay {
+  const dayRecord = (day as any);
+  const nestedDay = dayRecord?.dia && typeof dayRecord.dia === 'object' ? dayRecord.dia : null;
+  const menus = Array.isArray(dayRecord.menus)
+    ? dayRecord.menus
+    : Array.isArray(dayRecord.comidas)
+      ? dayRecord.comidas
+      : Array.isArray(dayRecord.meals)
+        ? dayRecord.meals
+        : [];
+  if (__DEV__) {
+    const firstMenu = menus[0] as any;
+    console.log('[plan][map-day] input', {
+      index,
+      hasFlatDate: typeof dayRecord?.fecha === 'string',
+      hasNestedDate: typeof nestedDay?.fecha === 'string',
+      menusCount: menus.length,
+      firstMenuKeys: firstMenu && typeof firstMenu === 'object' ? Object.keys(firstMenu).slice(0, 25) : [],
+      firstMenuIds: firstMenu && typeof firstMenu === 'object' ? {
+        id_menu_diario: firstMenu.id_menu_diario,
+        menuTrackingId: firstMenu.menuTrackingId,
+        id_plato: firstMenu.id_plato,
+        dishId: firstMenu.dishId,
+        idPlato: firstMenu.idPlato,
+        dish_id: firstMenu.dish_id,
+        nombre_tiempo: firstMenu.nombre_tiempo,
+      } : null,
+    });
+  }
+
+  const meals = sortMealsBySlot(menus.map((menu: NutritionPlanMenuApi, mealIndex: number) => {
+    const slotLabel = (menu as any)?.nombre_tiempo ?? (menu as any)?.tiempo_comida ?? (menu as any)?.slot;
+    const slot = slotFromMealLabel(slotLabel, mealIndex);
+    const calories = toNumber(menu.calorias_aportadas, 0);
+    const menuTrackingId = toText((menu as any)?.menuTrackingId ?? menu.id_menu_diario, `meal-${mealIndex + 1}`);
+    const dishId = toText(
+      (menu as any)?.dishId ?? (menu as any)?.id_plato ?? (menu as any)?.idPlato ?? (menu as any)?.dish_id,
+      '',
+    );
+    if (__DEV__ && (!dishId || menuTrackingId.startsWith('meal-'))) {
+      console.log('[plan][map-menu] suspicious ids', {
+        mealIndex,
+        slotLabel,
+        menuTrackingId,
+        dishId,
+        raw: {
+          id_menu_diario: (menu as any)?.id_menu_diario,
+          menuTrackingId: (menu as any)?.menuTrackingId,
+          id_plato: (menu as any)?.id_plato,
+          dishId: (menu as any)?.dishId,
+          idPlato: (menu as any)?.idPlato,
+          dish_id: (menu as any)?.dish_id,
+        },
+      });
+    }
+    const status = normalizeMealTrackingStatus(
+      (menu as any).estado ?? undefined,
+      (menu as any).realizado,
+      (menu as any).hora_registro ?? (menu as any).horaRegistro ?? (menu as any).registered_time,
+    );
+    return {
+      id: menuTrackingId,
+      menuTrackingId,
+      dishId: dishId || undefined,
+      slot,
+      title: toText(menu.nombre_plato, slot),
+      calories: Math.max(0, Math.round(calories)),
+      emoji: emojiForSlot(slot),
+      status,
+      statusLabel: status === 'done' ? 'Realizada' : status === 'skip' ? 'No realizada' : 'Pendiente',
+      summary: undefined,
+    } satisfies TodayMealItem;
+  }));
+
+  const completedMeals = meals.filter((meal) => meal.status === 'done').length;
+  const totalMeals = meals.length;
+  const labelParts = normalizeMealDayLabel((nestedDay ?? day) as any, index);
+
+  return {
+    id: normalizeMealDayId((nestedDay ?? day) as any, index),
+    date: coerceToLocalIsoDateString((day as any).fecha) ?? coerceToLocalIsoDateString(nestedDay?.fecha),
+    label: labelParts.label,
+    shortLabel: labelParts.shortLabel,
+    meals,
+    completedMeals,
+    totalMeals,
+    progressPct: totalMeals > 0 ? Math.round((completedMeals / totalMeals) * 100) : 0,
+  };
+}
+
+function collectPlanWeeksDays(weeks: NutritionPlanWeekApi[]): TodayMealDay[] {
+  const days = weeks
+    .filter((week): week is NutritionPlanWeekApi => Boolean(week) && typeof week === 'object')
+    .flatMap((week) => Array.isArray(week.dias) ? week.dias : Array.isArray(week.days) ? week.days : [])
+    .filter((day): day is NutritionPlanDayApi => Boolean(day) && typeof day === 'object');
+
+  return ensureUniqueTodayMealDayIds(days.map((day, index) => buildTodayMealDayFromPlanApi(day, index)));
+}
+
+export async function loadTodayMealPlanFromNutritionPlan(planId: string | number): Promise<TodayMealPlan> {
+  const weeks = await fetchNutritionPlanWeeks(planId);
+  if (weeks.length === 0) {
+    throw new Error('El plan no devolviÃ³ semanas (weeks vacÃ­o).');
+  }
+  const days = ensureUniqueTodayMealDayIds(collectPlanWeeksDays(weeks));
+  const activeDay = pickActiveTodayMealDay(days);
+  const meals = activeDay?.meals ?? [];
+  const completedMeals = activeDay?.completedMeals ?? 0;
+  const totalMeals = activeDay?.totalMeals ?? 0;
+  const progressPct = activeDay?.progressPct ?? 0;
+
+  const basePlan: TodayMealPlan = {
+    days,
+    selectedDayId: activeDay?.id ?? days[0]?.id ?? '',
+    meals,
+    completedMeals,
+    totalMeals,
+    progressPct,
+    summary: [
+      `Dia activo: ${toText(activeDay?.label ?? '', 'Sin dÃ­a activo')}`,
+      `Comidas realizadas: ${completedMeals}/${Math.max(totalMeals, 1)}`,
+    ],
+    updatedAt: activeDay?.date,
+  };
+
+  try {
+    const dateIso = activeDay?.date ?? getLocalIsoDate();
+    const statusMap = await fetchMealTrackingStatusMapFromDashboard(dateIso);
+    return overlayMealTrackingStatusMap(basePlan, statusMap);
+  } catch {
+    return basePlan;
+  }
+}
+
+export async function loadTodayMealPlanFromActivePlan(): Promise<TodayMealPlan> {
+  const payload = await fetchActiveNutritionPlanPayload();
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('No se pudo cargar el plan activo.');
+  }
+
+  if (__DEV__) {
+    const keys = Object.keys(payload as any);
+    console.log('[plan][active-plan] payload keys', keys.slice(0, 30));
+    const semanas = (payload as any).semanas;
+    const dias = (payload as any).dias;
+    console.log('[plan][active-plan] counts', {
+      semanas: Array.isArray(semanas) ? semanas.length : null,
+      dias: Array.isArray(dias) ? dias.length : null,
+    });
+  }
+
+  const weeks = Array.isArray((payload as any).semanas) ? ((payload as any).semanas as NutritionPlanWeekApi[]) : [];
+  const directDays = Array.isArray((payload as any).dias) ? ((payload as any).dias as NutritionPlanDayApi[]) : [];
+
+  const days = ensureUniqueTodayMealDayIds(
+    directDays.length > 0
+      ? directDays.map((day, index) => buildTodayMealDayFromPlanApi(day, index))
+      : collectPlanWeeksDays(weeks),
+  );
+
+  const activeDay = pickActiveTodayMealDay(days);
+  const meals = activeDay?.meals ?? [];
+  const completedMeals = activeDay?.completedMeals ?? 0;
+  const totalMeals = activeDay?.totalMeals ?? 0;
+  const progressPct = activeDay?.progressPct ?? 0;
+
+  if (__DEV__) {
+    console.log('[plan][active-plan] days/meals', { days: days.length, meals: meals.length });
+  }
+
+  const basePlan: TodayMealPlan = {
+    days,
+    selectedDayId: activeDay?.id ?? days[0]?.id ?? '',
+    meals,
+    completedMeals,
+    totalMeals,
+    progressPct,
+    summary: [
+      `Dia activo: ${toText(activeDay?.label ?? '', 'Sin dÃ­a activo')}`,
+      `Comidas realizadas: ${completedMeals}/${Math.max(totalMeals, 1)}`,
+    ],
+    updatedAt: activeDay?.date,
+  };
+
+  try {
+    const dateIso = activeDay?.date ?? getLocalIsoDate();
+    const statusMap = await fetchMealTrackingStatusMapFromDashboard(dateIso);
+    return overlayMealTrackingStatusMap(basePlan, statusMap);
+  } catch {
+    return basePlan;
+  }
+}
+
+export async function loadDishDetails(dishId: string): Promise<DishDetails> {
+  if (__DEV__) {
+    console.log('[plan][loadDishDetails] start', { dishId });
+  }
+  const response = await apiClient.get(`/dishes/${encodeURIComponent(dishId)}`);
+  if (__DEV__) {
+    const data = response.data as any;
+    console.log('[plan][loadDishDetails] raw', {
+      dishId,
+      success: data?.success,
+      dataKeys: data && typeof data === 'object' && data.data && typeof data.data === 'object' ? Object.keys(data.data) : [],
+      rootKeys: data && typeof data === 'object' ? Object.keys(data) : [],
+    });
+  }
+  const parsed = extractDishDetails(response.data, dishId);
+  if (__DEV__) {
+    console.log('[plan][loadDishDetails] parsed', {
+      dishId,
+      title: parsed.title,
+      calories: parsed.calories,
+      ingredientsCount: parsed.ingredients.length,
+      preparationCount: parsed.preparation.length,
+      hasRecipe: Boolean(parsed.recipe),
+    });
+  }
+  return parsed;
+}
+
+export async function saveMealTracking(params: {
+  menuTrackingId: string;
+  realized: boolean;
+  hora_registro?: string;
+  planId?: string | number;
+}): Promise<TodayMealPlan> {
+  if (__DEV__) {
+    console.log('[plan][saveMealTracking] start', {
+      menuTrackingId: params.menuTrackingId,
+      realized: params.realized,
+      planId: params.planId,
+      menuTrackingIdType: typeof params.menuTrackingId,
+    });
+  }
+
+  if (!params.menuTrackingId) {
+    if (__DEV__) console.log('[plan][saveMealTracking] missing menuTrackingId', { params });
+    throw new Error('menuTrackingId is required');
+  }
+
+  const rawMenuTrackingId = String(params.menuTrackingId).trim();
+  const menuTrackingId =
+    /^\d+$/.test(rawMenuTrackingId) && Number.isFinite(Number(rawMenuTrackingId))
+      ? Number(rawMenuTrackingId)
+      : params.menuTrackingId;
+
+  const payload: Record<string, unknown> = {
+    id_menu_diario: menuTrackingId,
+    realizado: params.realized,
+  };
+
+  if (typeof params.hora_registro === 'string' && params.hora_registro.trim().length > 0) {
+    payload.hora_registro = params.hora_registro.trim();
+  }
+
+  try {
+    await apiClient.post('/meal-tracking', payload);
+    if (__DEV__) console.log('[plan][saveMealTracking] post ok', { payload });
+  } catch (err) {
+    if (__DEV__) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.log('[plan][saveMealTracking] post failed', { payload, message });
+    }
+    throw err;
+  }
+
+  if (typeof params.planId !== 'undefined') {
+    return loadTodayMealPlanFromNutritionPlan(params.planId);
+  }
+
+  return loadTodayMealPlan();
 }
 
 export async function selectMenuOption(dayKey: DayKey, menuId: string): Promise<WeeklyPlan> {

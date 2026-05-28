@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
-import { StyleSheet, Text, TouchableOpacity, View, ScrollView, ActivityIndicator, Pressable } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, Text as SvgText } from 'react-native-svg';
@@ -11,6 +11,14 @@ import { IMCGauge } from '@/components/metrics/IMC';
 import { useAuth } from '@/hooks/use-auth';
 import { authStore } from '@/store/auth.store';
 import { apiClient } from '@/services/api.client';
+
+const normalizeText = (value: string): string =>
+  value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '')
+    .trim();
 
 // Componente Anillo Circular para Porcentajes
 const PercentageRing = ({
@@ -132,6 +140,27 @@ const ALIMENTO_ID_MAPPING: { [key: number]: string } = {
 
 // Mapeo de alimentos a categorías por nombre (fallback)
 const categorizarAlimento = (alimento: any): string => {
+  // Si el backend ya envÃ­a una categorÃ­a/grupo, usarla como fuente de verdad
+  // para evitar clasificaciones errÃ³neas (ej: "Mora" cayendo en vegetales).
+  const rawCategory =
+    typeof alimento?.categoria === 'string'
+      ? alimento.categoria
+      : typeof alimento?.category === 'string'
+        ? alimento.category
+        : typeof alimento?.grupo === 'string'
+          ? alimento.grupo
+          : undefined;
+
+  if (rawCategory) {
+    const normalized = rawCategory.toLowerCase().trim();
+    if (normalized in FOOD_CATEGORIES) return normalized;
+    if (normalized.includes('prote')) return 'proteinas';
+    if (normalized.includes('carb')) return 'carbohidratos';
+    if (normalized.includes('lact')) return 'lacteos';
+    if (normalized.includes('veget')) return 'vegetales';
+    if (normalized.includes('frut')) return 'frutas';
+  }
+
   const idAlimento = alimento.id_alimento;
   
   // Primero intentar por ID
@@ -147,7 +176,7 @@ const categorizarAlimento = (alimento: any): string => {
     carbohidratos: ['arroz', 'pan', 'pasta', 'papa', 'avena', 'quinoa', 'batata', 'maiz'],
     lacteos: ['leche', 'yogur', 'queso', 'mantequilla', 'crema', 'requeson', 'cuajada'],
     vegetales: ['brocoli', 'zanahoria', 'espinaca', 'cebolla', 'pimiento', 'lechuga', 'tomate', 'pepino'],
-    frutas: ['manzana', 'banana', 'naranja', 'uva', 'fresa', 'sandia', 'arandano', 'piña', 'durazno'],
+    frutas: ['manzana', 'banana', 'naranja', 'uva', 'fresa', 'sandia', 'arandano', 'piña', 'durazno', 'mora', 'mango', 'papaya', 'melon', 'kiwi'],
   };
 
   for (const [category, keywords] of Object.entries(keywordsByCategory)) {
@@ -165,12 +194,98 @@ const calcularIMC = (peso: number, altura: number): string => {
   return imc.toFixed(1);
 };
 
+type FoodCatalogItem = {
+  id_alimento: number;
+  nombre_alimento: string;
+  categoria?: string;
+  [key: string]: unknown;
+};
+
+const getFoodId = (value: any): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (value && typeof value === 'object') {
+    const raw = (value as any).id_alimento ?? (value as any).id ?? (value as any).food_id;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const extractFoodCatalogItems = (input: unknown): FoodCatalogItem[] => {
+  const items: FoodCatalogItem[] = [];
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+
+    if (!node || typeof node !== 'object') return;
+
+    const record = node as Record<string, unknown>;
+    const id =
+      typeof record.id_alimento === 'number'
+        ? record.id_alimento
+        : typeof record.id === 'number'
+          ? record.id
+          : typeof record.food_id === 'number'
+            ? record.food_id
+            : null;
+
+    const nombre =
+      typeof record.nombre_alimento === 'string'
+        ? record.nombre_alimento
+        : typeof record.nombre === 'string'
+          ? record.nombre
+          : typeof record.name === 'string'
+            ? record.name
+            : typeof record.food_name === 'string'
+              ? record.food_name
+              : null;
+
+    const categoria =
+      typeof record.categoria === 'string'
+        ? record.categoria
+        : typeof record.category === 'string'
+          ? record.category
+          : typeof record.grupo === 'string'
+            ? record.grupo
+            : null;
+
+    if (id !== null && nombre) {
+      items.push({
+        ...(record as any),
+        id_alimento: id,
+        nombre_alimento: nombre,
+        ...(categoria ? { categoria } : {}),
+      });
+    }
+
+    Object.values(record).forEach(visit);
+  };
+
+  visit(input);
+
+  const dedup = new Map<number, FoodCatalogItem>();
+  items.forEach((item) => {
+    if (!dedup.has(item.id_alimento)) dedup.set(item.id_alimento, item);
+  });
+  return Array.from(dedup.values());
+};
+
 export default function DatosMedicosScreen() {
   const { logout, isLoading } = useAuth();
   const [user, setUser] = useState<any>(null);
   const [userEval, setUserEval] = useState<any>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [preferredFoods, setPreferredFoods] = useState<any[]>([]);
+  const [foodCatalog, setFoodCatalog] = useState<FoodCatalogItem[]>([]);
+  const [foodCatalogLoading, setFoodCatalogLoading] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<{ [key: string]: boolean }>({
     proteinas: false,
     carbohidratos: false,
@@ -178,12 +293,246 @@ export default function DatosMedicosScreen() {
     vegetales: false,
     frutas: false,
   });
+  const [addFoodModal, setAddFoodModal] = useState<{
+    visible: boolean;
+    categoryKey: keyof typeof FOOD_CATEGORIES | null;
+    name: string;
+    saving: boolean;
+    error: string | null;
+  }>({
+    visible: false,
+    categoryKey: null,
+    name: '',
+    saving: false,
+    error: null,
+  });
 
   const toggleCategory = (categoryKey: string) => {
     setExpandedCategories(prev => ({
       ...prev,
       [categoryKey]: !prev[categoryKey]
     }));
+  };
+
+  const ensureFoodCatalogLoaded = async (forceReload = false) => {
+    if (foodCatalogLoading) return;
+    if (!forceReload && foodCatalog.length > 0) return;
+
+    setFoodCatalogLoading(true);
+    try {
+      const res = await apiClient.get('/foods?limit=500');
+      const data = res.data?.data ?? res.data;
+      const items = extractFoodCatalogItems(data);
+      setFoodCatalog(items);
+      return items;
+    } catch (error) {
+      console.warn('[datos-medicos] No se pudo cargar el catÃ¡logo de alimentos:', error);
+    } finally {
+      setFoodCatalogLoading(false);
+    }
+  };
+
+  const openAddFood = (categoryKey: keyof typeof FOOD_CATEGORIES) => {
+    setAddFoodModal({
+      visible: true,
+      categoryKey,
+      name: '',
+      saving: false,
+      error: null,
+    });
+    void ensureFoodCatalogLoaded(false);
+  };
+
+  const closeAddFood = () => {
+    setAddFoodModal((prev) => ({ ...prev, visible: false, saving: false, error: null }));
+  };
+
+  const persistPreferredFoods = async (nextFoods: any[]) => {
+    const ids = nextFoods
+      .map((item: any) => getFoodId(item))
+      .filter((id: any): id is number => typeof id === 'number' && Number.isFinite(id));
+
+    const uniqueIds = Array.from(new Set(ids));
+    await apiClient.put('/patient-profile/me', { alimentos_preferidos: uniqueIds });
+  };
+
+  const handleSelectExistingFood = async (food: FoodCatalogItem) => {
+    const normalizedName = normalizeText(food.nombre_alimento);
+    const alreadySelected = preferredFoods.some((item: any) => {
+      const itemId = getFoodId(item);
+      if (itemId && itemId === food.id_alimento) return true;
+
+      const itemName =
+        (item?.nombre_alimento ?? item?.nombre ?? '').toString()
+        || (itemId ? (foodCatalog.find((c) => c.id_alimento === itemId)?.nombre_alimento ?? '') : '');
+
+      return itemName ? normalizeText(itemName) === normalizedName : false;
+    });
+
+    if (alreadySelected) {
+      setAddFoodModal((prev) => ({ ...prev, error: 'Ese alimento ya estÃ¡ agregado.' }));
+      return;
+    }
+
+    setAddFoodModal((prev) => ({ ...prev, saving: true, error: null }));
+    const nextFoods = [...preferredFoods, food];
+    setPreferredFoods(nextFoods);
+    try {
+      await persistPreferredFoods(nextFoods);
+      closeAddFood();
+    } catch (persistErr) {
+      console.warn('[datos-medicos] No se pudo persistir alimentos_preferidos al agregar existente:', persistErr);
+      setAddFoodModal((prev) => ({ ...prev, saving: false, error: 'No pudimos guardar el alimento. Intenta nuevamente.' }));
+    }
+  };
+
+  const handleCreateCustomFood = async () => {
+    const categoryKey = addFoodModal.categoryKey;
+    const name = addFoodModal.name.trim();
+
+    if (!categoryKey) return;
+    if (name.length < 2) {
+      setAddFoodModal((prev) => ({ ...prev, error: 'Escribe un nombre válido (mínimo 2 letras).' }));
+      return;
+    }
+
+    setAddFoodModal((prev) => ({ ...prev, saving: true, error: null }));
+
+    try {
+      const normalizedInput = normalizeText(name);
+
+      const alreadySelected = preferredFoods.some((item: any) => {
+        const itemId = getFoodId(item);
+        const itemName =
+          (item?.nombre_alimento ?? item?.nombre ?? '').toString()
+          || (itemId ? (foodCatalog.find((c) => c.id_alimento === itemId)?.nombre_alimento ?? '') : '');
+
+        return itemName ? normalizeText(itemName) === normalizedInput : false;
+      });
+
+      if (alreadySelected) {
+        setAddFoodModal((prev) => ({
+          ...prev,
+          saving: false,
+          error: 'Ese alimento ya estÃ¡ agregado.',
+        }));
+        return;
+      }
+
+      // Si ya existe en el catÃ¡logo para la categorÃ­a, lo agregamos (evita error "ya existe").
+      const existingInCategory = foodCatalog.find((item) => {
+        if (categorizarAlimento(item) !== categoryKey) return false;
+        return normalizeText(item.nombre_alimento) === normalizedInput;
+      });
+
+      if (existingInCategory) {
+        const nextFoods = [...preferredFoods, existingInCategory];
+        setPreferredFoods(nextFoods);
+        try {
+          await persistPreferredFoods(nextFoods);
+        } catch (persistErr) {
+          console.warn('[datos-medicos] No se pudo persistir alimentos_preferidos al agregar existente:', persistErr);
+        }
+        closeAddFood();
+        return;
+      }
+
+      const res = await apiClient.post('/foods/custom', { nombre: name, categoria: categoryKey });
+      const payload = res.data?.data ?? res.data;
+      const created = payload?.food ?? payload;
+      const createdId = created?.id_alimento ?? created?.id ?? null;
+
+      const nextFood = {
+        ...(created ?? {}),
+        id_alimento: created?.id_alimento ?? createdId,
+        nombre_alimento: created?.nombre_alimento ?? created?.nombre ?? name,
+        // Preservar la categoría seleccionada si el backend no la devuelve.
+        categoria: created?.categoria ?? categoryKey,
+      };
+
+      const nextFoods = [...preferredFoods, nextFood];
+      setPreferredFoods(nextFoods);
+
+      // Mantener el catÃ¡logo local alineado (si el backend devolviÃ³ un alimento existente por idempotencia).
+      if (createdId) {
+        setFoodCatalog((prev) => {
+          const id = Number(createdId);
+          if (!Number.isFinite(id)) return prev;
+          if (prev.some((item) => item.id_alimento === id)) return prev;
+          return [...prev, nextFood as any];
+        });
+      }
+
+      // (La actualizaciÃ³n del estado ya se hizo con `nextFoods`)
+
+      // Mejor esfuerzo: persistir también como preferido en el perfil (si el backend acepta update parcial).
+      if (createdId) {
+        try {
+          await persistPreferredFoods(nextFoods);
+        } catch (persistErr) {
+          console.warn('[datos-medicos] No se pudo persistir alimentos_preferidos con el alimento custom:', persistErr);
+        }
+      }
+
+      closeAddFood();
+    } catch (err) {
+      console.warn('[datos-medicos] create custom food failed:', err);
+
+      const status =
+        typeof (err as any)?.status === 'number'
+          ? (err as any).status
+          : typeof (err as any)?.response?.status === 'number'
+            ? (err as any).response.status
+            : undefined;
+      const message = typeof (err as any)?.message === 'string' ? (err as any).message : '';
+      const backendMessage =
+        typeof (err as any)?.backendData?.error === 'string'
+          ? (err as any).backendData.error
+          : typeof (err as any)?.backendData?.error?.message === 'string'
+            ? (err as any).backendData.error.message
+            : '';
+      const combined = `${message} ${backendMessage}`.toLowerCase();
+      const looksLikeDuplicate =
+        status === 409 ||
+        combined.includes('ya existe') ||
+        combined.includes('already exists') ||
+        combined.includes('duplicate');
+
+      if (looksLikeDuplicate && addFoodModal.categoryKey) {
+        try {
+          const res = await apiClient.get('/foods?limit=500');
+          const data = res.data?.data ?? res.data;
+          const items = extractFoodCatalogItems(data);
+          setFoodCatalog(items);
+
+          const normalizedInput = normalizeText(name);
+          const categoryKey = addFoodModal.categoryKey;
+          const existing = items.find((item) => {
+            if (normalizeText(item.nombre_alimento) !== normalizedInput) return false;
+            return categorizarAlimento(item) === categoryKey;
+          });
+
+          if (existing) {
+            await handleSelectExistingFood(existing);
+            return;
+          }
+
+          setAddFoodModal((prev) => ({
+            ...prev,
+            saving: false,
+            error: 'Ese alimento ya existe, pero no aparece en la lista de alimentos que devuelve la API.',
+          }));
+          return;
+        } catch (fallbackErr) {
+          console.warn('[datos-medicos] duplicate fallback failed:', fallbackErr);
+        }
+      }
+      setAddFoodModal((prev) => ({
+        ...prev,
+        saving: false,
+        error: 'No pudimos guardar el alimento. Si ya existe, selecciÃ³nalo o cambia el nombre.',
+      }));
+    }
   };
 
   useEffect(() => {
@@ -216,7 +565,12 @@ export default function DatosMedicosScreen() {
           // Seguimos con los datos del store
         }
 
-        if (mounted) setUser(mergedUser);
+        if (mounted) {
+          setUser(mergedUser);
+          const nextPreferidos = mergedUser?.onboarding?.alimentos_preferidos;
+          setPreferredFoods(Array.isArray(nextPreferidos) ? nextPreferidos : []);
+          void ensureFoodCatalogLoaded();
+        }
 
         // Obtener evaluación clínica
         try {
@@ -282,7 +636,23 @@ export default function DatosMedicosScreen() {
   const alergias = onboarding.alergias_intolerancias || '–';
   const restricciones = onboarding.restricciones_alimenticias || '–';
   const condiciones = onboarding.condiciones || [];
-  const alimentos = onboarding.alimentos_preferidos || [];
+  const alimentosSource = preferredFoods.length > 0 ? preferredFoods : (onboarding.alimentos_preferidos || []);
+  const alimentos = (() => {
+    if (!Array.isArray(alimentosSource)) return [];
+
+    return alimentosSource
+      .map((item: any) => {
+        // Si ya es objeto con nombre, lo respetamos.
+        if (item && typeof item === 'object') return item;
+
+        // Si es ID (number/string), intentamos resolverlo contra el catÃ¡logo.
+        const id = getFoodId(item);
+        if (!id) return null;
+        const resolved = foodCatalog.find((c) => c.id_alimento === id);
+        return resolved ?? { id_alimento: id, nombre_alimento: `#${id}` };
+      })
+      .filter(Boolean);
+  })();
   const deportes = onboarding.deportes || [];
 
   // Solo usar valores reales de la evaluación clínica — sin fallbacks hardcodeados
@@ -407,13 +777,11 @@ export default function DatosMedicosScreen() {
         </View>
 
         {/* Alimentos Preferidos */}
-        {alimentos.length > 0 && (
-          <View style={styles.card}>
+        <View style={styles.card}>
             <Text style={styles.subsectionTitle}>Alimentos Preferidos</Text>
             
             {Object.entries(FOOD_CATEGORIES).map(([categoryKey, categoryInfo]: any) => {
               const alimentosEnCategoria = alimentos.filter((a: any) => categorizarAlimento(a) === categoryKey);
-              if (alimentosEnCategoria.length === 0) return null;
               
               const isExpanded = expandedCategories[categoryKey];
               
@@ -449,7 +817,10 @@ export default function DatosMedicosScreen() {
                           <Text style={styles.chipText}>{alimento.nombre_alimento || alimento.nombre || '–'}</Text>
                         </View>
                       ))}
-                      <Pressable style={[styles.addFoodButton, { backgroundColor: categoryInfo.color }]}>
+                      <Pressable
+                        style={[styles.addFoodButton, { backgroundColor: categoryInfo.color }]}
+                        onPress={() => openAddFood(categoryKey as keyof typeof FOOD_CATEGORIES)}
+                      >
                         <MaterialIcons name="add" size={24} color="white" />
                       </Pressable>
                     </View>
@@ -458,7 +829,122 @@ export default function DatosMedicosScreen() {
               );
             })}
           </View>
-        )}
+
+        {/* Modal: agregar alimento custom */}
+        <Modal
+          visible={addFoodModal.visible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeAddFood}
+        >
+          <Pressable style={styles.modalOverlay} onPress={closeAddFood}>
+            <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.modalTitle}>Agregar alimento</Text>
+              <Text style={styles.modalSubtitle}>
+                Categoría:{' '}
+                <Text style={styles.modalSubtitleStrong}>
+                  {addFoodModal.categoryKey ? FOOD_CATEGORIES[addFoodModal.categoryKey].name : '—'}
+                </Text>
+              </Text>
+
+              <TextInput
+                placeholder="Ej: Zapote"
+                placeholderTextColor="#9ca3af"
+                value={addFoodModal.name}
+                onChangeText={(text) => setAddFoodModal((prev) => ({ ...prev, name: text, error: null }))}
+                style={styles.modalInput}
+                autoCapitalize="words"
+                autoCorrect={false}
+                editable={!addFoodModal.saving}
+              />
+
+              {addFoodModal.categoryKey && (
+                <View style={styles.modalSuggestions}>
+                  <View style={styles.modalSuggestionsHeader}>
+                    <Text style={styles.modalSuggestionsTitle}>Disponibles</Text>
+                    {foodCatalogLoading ? <ActivityIndicator size="small" color="#6b7280" /> : null}
+                  </View>
+
+                  <View style={styles.modalSuggestionsWrap}>
+                    {(() => {
+                      const categoryKey = addFoodModal.categoryKey;
+                      const query = normalizeText(addFoodModal.name);
+
+                      const selectedNames = new Set(
+                        preferredFoods.map((item: any) =>
+                          normalizeText(
+                            (item?.nombre_alimento ?? item?.nombre ?? '').toString()
+                            || (() => {
+                              const id = getFoodId(item);
+                              return id ? (foodCatalog.find((c) => c.id_alimento === id)?.nombre_alimento ?? '') : '';
+                            })(),
+                          )
+                        ),
+                      );
+
+                      const selectedIds = new Set(
+                        preferredFoods
+                          .map((item: any) => getFoodId(item))
+                          .filter((id: any): id is number => typeof id === 'number' && Number.isFinite(id)),
+                      );
+
+                      const candidates = foodCatalog
+                        .filter((item) => categorizarAlimento(item) === categoryKey)
+                        .filter((item) => !selectedIds.has(item.id_alimento))
+                        .filter((item) => !selectedNames.has(normalizeText(item.nombre_alimento)))
+                        .filter((item) => (query.length > 0 ? normalizeText(item.nombre_alimento).includes(query) : true))
+                        .slice(0, 18);
+
+                      if (candidates.length === 0) {
+                        return (
+                          <Text style={styles.modalSuggestionsEmpty}>
+                            {query.length > 0
+                              ? 'No encontramos coincidencias. Puedes crear uno nuevo.'
+                              : 'No hay mÃ¡s alimentos disponibles para agregar.'}
+                          </Text>
+                        );
+                      }
+
+                      return candidates.map((item) => (
+                        <Pressable
+                          key={`suggest-${item.id_alimento}`}
+                          style={styles.modalSuggestionChip}
+                          onPress={() => void handleSelectExistingFood(item)}
+                          disabled={addFoodModal.saving}
+                        >
+                          <Text style={styles.modalSuggestionChipText}>{item.nombre_alimento}</Text>
+                        </Pressable>
+                      ));
+                    })()}
+                  </View>
+                </View>
+              )}
+
+              {addFoodModal.error ? <Text style={styles.modalError}>{addFoodModal.error}</Text> : null}
+
+              <View style={styles.modalActions}>
+                <Pressable
+                  style={[styles.modalBtn, styles.modalBtnGhost]}
+                  onPress={closeAddFood}
+                  disabled={addFoodModal.saving}
+                >
+                  <Text style={styles.modalBtnGhostText}>Cancelar</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.modalBtn, styles.modalBtnPrimary, addFoodModal.saving && { opacity: 0.7 }]}
+                  onPress={() => void handleCreateCustomFood()}
+                  disabled={addFoodModal.saving}
+                >
+                  {addFoodModal.saving ? (
+                    <ActivityIndicator size="small" color="#ffffff" />
+                  ) : (
+                    <Text style={styles.modalBtnPrimaryText}>Guardar</Text>
+                  )}
+                </Pressable>
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
 
         {/* Alimentos a Evitar */}
         <View style={styles.card}>
@@ -764,6 +1250,28 @@ const styles = StyleSheet.create({
   foodChip: { backgroundColor: '#ffffff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: '#eadfce' },
   chipText: { fontSize: 12, color: '#6d6258', fontWeight: '600' },
   addFoodButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+
+  // Modal (Add custom food)
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 17, 21, 0.35)', justifyContent: 'center', padding: 18 },
+  modalCard: { backgroundColor: '#ffffff', borderRadius: 20, borderWidth: 1, borderColor: '#efe6da', padding: 16 },
+  modalTitle: { fontSize: 18, fontWeight: '900', color: '#0f2742' },
+  modalSubtitle: { fontSize: 13, color: '#7c7268', marginTop: 6, fontWeight: '600' },
+  modalSubtitleStrong: { color: '#111827', fontWeight: '900' },
+  modalInput: { marginTop: 12, borderWidth: 1, borderColor: '#eadfce', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: '#111827', backgroundColor: '#fbf8f4', fontWeight: '700' },
+  modalSuggestions: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f0e7dc' },
+  modalSuggestionsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  modalSuggestionsTitle: { fontSize: 12, color: '#6d6258', fontWeight: '900', letterSpacing: 0.4, textTransform: 'uppercase' },
+  modalSuggestionsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  modalSuggestionChip: { backgroundColor: '#ffffff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: '#eadfce' },
+  modalSuggestionChipText: { fontSize: 12, color: '#374151', fontWeight: '700' },
+  modalSuggestionsEmpty: { color: '#6b7280', fontSize: 12, fontWeight: '600' },
+  modalError: { marginTop: 10, color: '#ef4444', fontWeight: '700', fontSize: 12 },
+  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 14 },
+  modalBtn: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center', minWidth: 100 },
+  modalBtnGhost: { backgroundColor: '#f7f3ee', borderWidth: 1, borderColor: '#efe6da' },
+  modalBtnGhostText: { color: '#6d6258', fontWeight: '900' },
+  modalBtnPrimary: { backgroundColor: '#111827' },
+  modalBtnPrimaryText: { color: '#ffffff', fontWeight: '900' },
   
   // Bio Data
   bioHeaderRow: { flexDirection: 'row', gap: 16, marginBottom: 24 },

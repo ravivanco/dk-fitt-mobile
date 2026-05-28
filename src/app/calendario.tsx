@@ -24,6 +24,12 @@ const EVENTOS_MOCK: Record<string, Array<{ id: number; tipo: string; nombre: str
 
 const getDaysInMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
 const getFirstDayOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+const formatLocalIsoDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export default function CalendarioScreen() {
   const [currentDate, setCurrentDate] = useState(new Date(2026, 3, 17));
@@ -45,7 +51,7 @@ export default function CalendarioScreen() {
     setSelectedDate(new Date(currentDate.getFullYear(), currentDate.getMonth(), day));
   };
 
-  const selectedDateKey = selectedDate.toISOString().split('T')[0];
+  const selectedDateKey = formatLocalIsoDate(selectedDate);
   const eventosDelDia = EVENTOS_MOCK[selectedDateKey] || [];
 
   const renderCalendarDays = () => {

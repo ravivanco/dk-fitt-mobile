@@ -66,3 +66,29 @@ export type AnalyzeImageRequest = {
 export type AnalyzeImageUrlResponse = IntakeEstimation & {
   [key: string]: unknown;
 };
+
+export type AdditionalIntakeFoodItem = {
+  nombre: string;
+  cantidad_g?: number | null;
+  calorias?: number | null;
+  [key: string]: unknown;
+};
+
+export type AdditionalIntakeRequest = {
+  descripcion_alimento?: string;
+  imagen_url: string;
+  calorias_estimadas: number;
+  porcion_g?: number;
+  proteinas_g?: number;
+  carbohidratos_g?: number;
+  grasas_g?: number;
+  confianza_pct?: number;
+  fuente_estimacion?: string;
+  mensaje?: string;
+  alimentos_detectados?: AdditionalIntakeFoodItem[];
+};
+
+export type AdditionalIntakeRecord = {
+  id_consumo_adicional: number;
+  [key: string]: unknown;
+};
