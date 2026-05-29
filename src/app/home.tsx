@@ -2,13 +2,15 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { router } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 
 import { FormBackgroundDecor } from '@/components/forms/components/form-background-decor';
 import { BottomNav } from '@/components/navigation/bottom-nav';
+import { AppointmentsNotificationsModal } from '@/components/notifications/appointments-notifications-modal';
 import { apiClient } from '@/services/api.client';
+import { fetchMyAppointments, type Appointment } from '@/services/appointments.service';
 import {
   loadCalorieDashboard
 } from '@/services/calorie.service';
@@ -123,6 +125,25 @@ export default function HomeScreen() {
   const [userName, setUserName] = useState('Usuario');
   const [userEval, setUserEval] = useState<any>(null);
   const [dashboard, setDashboard] = useState<CalorieControlDashboard | null>(null);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsError, setAppointmentsError] = useState<string | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  const refreshAppointments = React.useCallback(async (opts?: { includeHistory?: boolean }) => {
+    const includeHistory = opts?.includeHistory ?? false;
+    setAppointmentsError(null);
+    setAppointmentsLoading(true);
+    try {
+      const items = await fetchMyAppointments({ proximas: includeHistory ? false : true });
+      setAppointments(Array.isArray(items) ? items : []);
+    } catch (err: any) {
+      setAppointments([]);
+      setAppointmentsError(typeof err?.message === 'string' ? err.message : 'No pudimos cargar tus citas.');
+    } finally {
+      setAppointmentsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -225,6 +246,14 @@ export default function HomeScreen() {
     }, [])
   );
 
+  useFocusEffect(
+    React.useCallback(() => {
+      void refreshAppointments({ includeHistory: true });
+    }, [])
+  );
+
+  const hasAnyAppointments = appointments.length > 0;
+
   useEffect(() => {
     const today = formatLocalIsoDate();
     return subscribeCalorieControlDashboard(today, () => {
@@ -317,11 +346,28 @@ export default function HomeScreen() {
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.headerContainer}>
             <Text style={styles.greeting}>Hola, {userName}</Text>
-            <View style={styles.notificationButton}>
+            <Pressable
+              style={styles.notificationButton}
+              onPress={() => {
+                setNotificationsOpen(true);
+                void refreshAppointments({ includeHistory: true });
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Notificaciones"
+              hitSlop={10}
+            >
               <MaterialCommunityIcons name="bell-outline" size={20} color="#666" />
-              <View style={styles.notificationBadge} />
-            </View>
+              {hasAnyAppointments && <View style={styles.notificationBadge} />}
+            </Pressable>
           </View>
+
+          <AppointmentsNotificationsModal
+            visible={notificationsOpen}
+            onClose={() => setNotificationsOpen(false)}
+            loading={appointmentsLoading}
+            error={appointmentsError}
+            appointments={appointments}
+          />
 
           <View style={styles.calendarWrap}>
             <ScrollView

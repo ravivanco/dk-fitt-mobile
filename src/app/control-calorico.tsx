@@ -945,7 +945,7 @@ export default function ControlCaloricoScreen() {
                     <View style={styles.warningCard}>
                       <MaterialCommunityIcons name="alert" size={18} color="#f97316" />
                       <Text style={styles.warningText}>
-                        Estimaci\u00f3n con baja confianza ({Math.round(estimate.estimation.confianza_pct)}%). Revisa y ajusta si es necesario.
+                        Estimación con baja confianza ({Math.round(estimate.estimation.confianza_pct)}%). Revisa y ajusta si es necesario.
                       </Text>
                     </View>
                   )}
@@ -966,7 +966,7 @@ export default function ControlCaloricoScreen() {
                   {estimate.requiresManualCalories && (
                     <View style={styles.manualCard}>
                       <Text style={styles.manualTitle}>No se pudo estimar con seguridad</Text>
-                      <Text style={styles.manualText}>Ingresa las calor\u00edas manualmente para registrarla.</Text>
+                      <Text style={styles.manualText}>Ingresa las calorias manualmente para registrarla.</Text>
                       <View style={styles.manualInputRow}>
                         <TextInput
                           value={manualCalories}

@@ -306,13 +306,15 @@ function MealDayStrip({
     >
       {days.map((day, index) => {
         const active = day.id === selectedDayId;
+        const blocked = (day as any)?.isBlocked === true;
         return (
           <TouchableOpacity key={`${day.id}:${day.date ?? ''}:${index}`} activeOpacity={0.8} onPress={() => onSelectDay(day.id)}>
-            <View style={[styles.mealDayCard, active && styles.mealDayCardActive]}>
-              <Text style={[styles.mealDayLabel, active && styles.mealDayLabelActive]}>{day.shortLabel}</Text>
-              <Text style={[styles.mealDayDate, active && styles.mealDayDateActive]}>{day.date ? new Date(`${day.date}T00:00:00`).getDate() : '--'}</Text>
-              <Text style={[styles.mealDayMeta, active && styles.mealDayMetaActive]}>{day.progressPct}%</Text>
-              <Text style={[styles.mealDaySubtext, active && styles.mealDaySubtextActive]}>{day.label}</Text>
+            <View style={[styles.mealDayCard, active && styles.mealDayCardActive, blocked && styles.mealDayCardBlocked]}>
+              <Text style={[styles.mealDayLabel, active && styles.mealDayLabelActive, blocked && styles.mealDayLabelBlocked]}>{day.shortLabel}</Text>
+              <Text style={[styles.mealDayDate, active && styles.mealDayDateActive, blocked && styles.mealDayDateBlocked]}>{day.date ? new Date(`${day.date}T00:00:00`).getDate() : '--'}</Text>
+              <Text style={[styles.mealDayMeta, active && styles.mealDayMetaActive, blocked && styles.mealDayMetaBlocked]}>{day.progressPct}%</Text>
+              <Text style={[styles.mealDaySubtext, active && styles.mealDaySubtextActive, blocked && styles.mealDaySubtextBlocked]}>{day.label}</Text>
+              {blocked && <MaterialCommunityIcons name="lock-outline" size={14} color="#b9b2a8" style={{ marginTop: 4 }} />}
             </View>
           </TouchableOpacity>
         );
@@ -585,8 +587,16 @@ export default function MiPlanScreen() {
       }
 
       if (mealResult.status === 'fulfilled') {
-        setTodayPlan(mealResult.value);
-        setSelectedMealDayId(mealResult.value.selectedDayId);
+        const nextPlan = mealResult.value;
+        setTodayPlan(nextPlan);
+
+        // Preferir el dÃ­a que coincide con la fecha del dispositivo (evita resaltar semanas pasadas).
+        const todayIso = formatLocalIsoDate();
+        const todayMatch =
+          nextPlan.days.find((day) => typeof day.date === 'string' && day.date.slice(0, 10) === todayIso)
+          ?? null;
+
+        setSelectedMealDayId(todayMatch?.id ?? nextPlan.selectedDayId);
         // selectedMealDayId define la fecha a consultar; no usamos un calendario extra en esta pantalla.
       } else {
         // Fallback: si falla el endpoint nuevo de weeks, mantener la experiencia previa
@@ -637,6 +647,24 @@ export default function MiPlanScreen() {
       ?? null
     );
   }, [selectedMealDayId, todayPlan]);
+
+  const nextNonBlockedDayId = useMemo(() => {
+    if (!todayPlan || todayPlan.days.length === 0) return '';
+    const todayIso = formatLocalIsoDate();
+    const sorted = [...todayPlan.days].sort((a, b) => {
+      const isoA = typeof a.date === 'string' ? a.date.slice(0, 10) : '';
+      const isoB = typeof b.date === 'string' ? b.date.slice(0, 10) : '';
+      return isoA.localeCompare(isoB);
+    });
+
+    const next = sorted.find((day) => {
+      const iso = typeof day.date === 'string' ? day.date.slice(0, 10) : '';
+      const blocked = (day as any)?.isBlocked === true;
+      return Boolean(iso) && iso > todayIso && !blocked;
+    });
+
+    return next?.id ?? '';
+  }, [todayPlan]);
 
   const selectedDate = useMemo(() => {
     const date = selectedMealDay?.date;
@@ -953,7 +981,18 @@ export default function MiPlanScreen() {
               </View>
 
               {/* Meal list */}
-              {todayMeals.length > 0 ? (
+              {(selectedMealDay as any)?.isBlocked === true ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyEmoji}>ðŸ”—</Text>
+                  <Text style={styles.emptyTitle}>Hoy no tienes plan para tu fin de semana</Text>
+                  <Text style={styles.emptySubtext}>El fin de semana estÃ¡ bloqueado. Puedes revisar los menÃºs de la siguiente semana.</Text>
+                  {nextNonBlockedDayId ? (
+                    <TouchableOpacity style={styles.retryButton} onPress={() => setSelectedMealDayId(nextNonBlockedDayId)} activeOpacity={0.8}>
+                      <Text style={styles.retryButtonText}>Ver siguiente semana</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : todayMeals.length > 0 ? (
                 <View style={styles.mealList}>
                   {todayMeals.map((meal) => {
                     const trackingKey = String(meal.menuTrackingId);
@@ -1237,6 +1276,11 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 3,
   },
+  mealDayCardBlocked: {
+    backgroundColor: '#f7f5f2',
+    borderColor: '#e8e4dd',
+    opacity: 0.7,
+  },
   mealDayLabel: {
     fontSize: 10,
     lineHeight: 12,
@@ -1246,6 +1290,9 @@ const styles = StyleSheet.create({
   },
   mealDayLabelActive: {
     color: '#1aa44f',
+  },
+  mealDayLabelBlocked: {
+    color: '#b9b2a8',
   },
   mealDayDate: {
     fontSize: 24,
@@ -1257,6 +1304,9 @@ const styles = StyleSheet.create({
   mealDayDateActive: {
     color: '#0f1115',
   },
+  mealDayDateBlocked: {
+    color: '#b9b2a8',
+  },
   mealDayMeta: {
     fontSize: 10,
     fontWeight: '700',
@@ -1265,6 +1315,9 @@ const styles = StyleSheet.create({
   },
   mealDayMetaActive: {
     color: '#f5a623',
+  },
+  mealDayMetaBlocked: {
+    color: '#c7c0b6',
   },
   mealDaySubtext: {
     fontSize: 9,
@@ -1275,6 +1328,9 @@ const styles = StyleSheet.create({
   },
   mealDaySubtextActive: {
     color: '#5f574d',
+  },
+  mealDaySubtextBlocked: {
+    color: '#c7c0b6',
   },
 
   // ── Day Summary ──────────────────────

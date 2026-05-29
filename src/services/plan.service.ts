@@ -51,6 +51,7 @@ export type TodayMealDay = {
   completedMeals: number;
   totalMeals: number;
   progressPct: number;
+  isBlocked?: boolean;
 };
 
 function overlayMealTrackingStatus(plan: TodayMealPlan, tracking: TodayMealPlan): TodayMealPlan {
@@ -169,10 +170,85 @@ function coerceToLocalIsoDateString(input: unknown): string | undefined {
   if (typeof input !== 'string') return undefined;
   const raw = input.trim();
   if (!raw) return undefined;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  // Si viene en formato ISO con hora/zona (p.ej. "2026-05-25T00:00:00.000Z"),
+  // NO lo convertimos a Date local porque puede correrse un dÃ­a por timezone.
+  // En su lugar, tomamos el componente de fecha tal cual.
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
   const parsed = new Date(raw);
   if (!Number.isFinite(parsed.getTime())) return undefined;
   return getLocalIsoDate(parsed);
+}
+
+function getWeekStartIsoMonday(isoDate: string) {
+  const date = new Date(`${isoDate}T12:00:00`);
+  const day = date.getDay(); // 0=DOM..6=SAB
+  const diffToMonday = (day + 6) % 7; // lunes=0
+  const monday = new Date(date);
+  monday.setDate(date.getDate() - diffToMonday);
+  return getLocalIsoDate(monday);
+}
+
+function getWeekEndIsoSunday(mondayIso: string) {
+  const monday = new Date(`${mondayIso}T12:00:00`);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return getLocalIsoDate(sunday);
+}
+
+function formatWeekdayLabelEs(dateIso: string) {
+  const date = new Date(`${dateIso}T12:00:00`);
+  if (!Number.isFinite(date.getTime())) return { label: 'Día', shortLabel: 'DIA' };
+  const label = normalizeText(date.toLocaleDateString('es-EC', { weekday: 'long' }));
+  const pretty = label ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : 'Día';
+  const shortLabel = pretty.slice(0, 3).toUpperCase();
+  return { label: pretty, shortLabel };
+}
+
+function fillMissingDaysWithWeekendBlocks(days: TodayMealDay[]) {
+  const dated = days.filter((day) => typeof day.date === 'string' && day.date.length >= 10) as Array<TodayMealDay & { date: string }>;
+  if (dated.length === 0) return days;
+
+  const dates = dated.map((day) => day.date.slice(0, 10)).sort();
+  const minIso = dates[0];
+  const maxIso = dates[dates.length - 1];
+
+  const start = new Date(`${minIso}T12:00:00`);
+  const end = new Date(`${maxIso}T12:00:00`);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return days;
+
+  const byIso = new Map<string, TodayMealDay>();
+  for (const day of days) {
+    const iso = typeof day.date === 'string' ? day.date.slice(0, 10) : '';
+    if (iso) byIso.set(iso, day);
+  }
+
+  const result: TodayMealDay[] = [];
+  for (let cursor = new Date(start); cursor.getTime() <= end.getTime(); cursor.setDate(cursor.getDate() + 1)) {
+    const iso = getLocalIsoDate(cursor);
+    const existing = byIso.get(iso);
+    if (existing) {
+      result.push(existing);
+      continue;
+    }
+
+    const weekday = cursor.getDay(); // 0 dom, 6 sab
+    const isWeekend = weekday === 0 || weekday === 6;
+    const labelParts = formatWeekdayLabelEs(iso);
+
+    result.push({
+      id: `blocked-${iso}`,
+      date: iso,
+      label: labelParts.label,
+      shortLabel: labelParts.shortLabel,
+      meals: [],
+      completedMeals: 0,
+      totalMeals: 0,
+      progressPct: 0,
+      isBlocked: isWeekend,
+    });
+  }
+
+  return ensureUniqueTodayMealDayIds(result);
 }
 
 async function fetchMealTrackingStatusMapFromDashboard(dateIso: string) {
@@ -186,6 +262,24 @@ async function fetchMealTrackingStatusMapFromDashboard(dateIso: string) {
     map[trackingId] = status;
   }
   return map;
+}
+
+async function fetchMealTrackingStatusMapForDates(dateIsos: string[]) {
+  const uniqueDates = Array.from(
+    new Set(
+      dateIsos
+        .filter((d) => typeof d === 'string' && d.length >= 10)
+        .map((d) => d.slice(0, 10)),
+    ),
+  );
+
+  const merged: Record<string, TodayMealItem['status']> = {};
+  const results = await Promise.allSettled(uniqueDates.map((dateIso) => fetchMealTrackingStatusMapFromDashboard(dateIso)));
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue;
+    Object.assign(merged, result.value);
+  }
+  return merged;
 }
 
 type WeeklyMealMenuApi = {
@@ -998,7 +1092,8 @@ function normalizeMealDayLabel(day: WeeklyMealDayApi, fallbackIndex: number) {
 
 function normalizeMealDayId(day: WeeklyMealDayApi, fallbackIndex: number) {
   return toText(
-    day.fecha ?? day.dia_semana ?? day.id_dia_plan ?? day.id ?? '',
+    // Preferimos `fecha` real del dÃ­a del plan. En algunos payloads el dÃ­a viene anidado como `dia`.
+    (day as any)?.dia?.fecha ?? day.fecha ?? day.dia_semana ?? day.id_dia_plan ?? (day as any).id ?? '',
     `day-${fallbackIndex + 1}`,
   );
 }
@@ -1436,28 +1531,9 @@ function buildTodayMealDayFromPlanApi(day: NutritionPlanDayApi, index: number): 
     ? dayRecord.menus
     : Array.isArray(dayRecord.comidas)
       ? dayRecord.comidas
-      : Array.isArray(dayRecord.meals)
+    : Array.isArray(dayRecord.meals)
         ? dayRecord.meals
         : [];
-  if (__DEV__) {
-    const firstMenu = menus[0] as any;
-    console.log('[plan][map-day] input', {
-      index,
-      hasFlatDate: typeof dayRecord?.fecha === 'string',
-      hasNestedDate: typeof nestedDay?.fecha === 'string',
-      menusCount: menus.length,
-      firstMenuKeys: firstMenu && typeof firstMenu === 'object' ? Object.keys(firstMenu).slice(0, 25) : [],
-      firstMenuIds: firstMenu && typeof firstMenu === 'object' ? {
-        id_menu_diario: firstMenu.id_menu_diario,
-        menuTrackingId: firstMenu.menuTrackingId,
-        id_plato: firstMenu.id_plato,
-        dishId: firstMenu.dishId,
-        idPlato: firstMenu.idPlato,
-        dish_id: firstMenu.dish_id,
-        nombre_tiempo: firstMenu.nombre_tiempo,
-      } : null,
-    });
-  }
 
   const meals = sortMealsBySlot(menus.map((menu: NutritionPlanMenuApi, mealIndex: number) => {
     const slotLabel = (menu as any)?.nombre_tiempo ?? (menu as any)?.tiempo_comida ?? (menu as any)?.slot;
@@ -1506,10 +1582,13 @@ function buildTodayMealDayFromPlanApi(day: NutritionPlanDayApi, index: number): 
   const completedMeals = meals.filter((meal) => meal.status === 'done').length;
   const totalMeals = meals.length;
   const labelParts = normalizeMealDayLabel((nestedDay ?? day) as any, index);
+  const resolvedDate =
+    coerceToLocalIsoDateString(nestedDay?.fecha) ?? coerceToLocalIsoDateString((day as any).fecha);
 
   return {
     id: normalizeMealDayId((nestedDay ?? day) as any, index),
-    date: coerceToLocalIsoDateString((day as any).fecha) ?? coerceToLocalIsoDateString(nestedDay?.fecha),
+    // Prefer nested `dia.fecha` cuando exista; el `day.fecha` puede venir como metadata y no coincidir.
+    date: resolvedDate,
     label: labelParts.label,
     shortLabel: labelParts.shortLabel,
     meals,
@@ -1555,8 +1634,8 @@ export async function loadTodayMealPlanFromNutritionPlan(planId: string | number
   };
 
   try {
-    const dateIso = activeDay?.date ?? getLocalIsoDate();
-    const statusMap = await fetchMealTrackingStatusMapFromDashboard(dateIso);
+    const dateIsos = basePlan.days.map((day) => day.date ?? '').filter(Boolean) as string[];
+    const statusMap = await fetchMealTrackingStatusMapForDates(dateIsos.length > 0 ? dateIsos : [getLocalIsoDate()]);
     return overlayMealTrackingStatusMap(basePlan, statusMap);
   } catch {
     return basePlan;
@@ -1569,35 +1648,143 @@ export async function loadTodayMealPlanFromActivePlan(): Promise<TodayMealPlan> 
     throw new Error('No se pudo cargar el plan activo.');
   }
 
-  if (__DEV__) {
-    const keys = Object.keys(payload as any);
-    console.log('[plan][active-plan] payload keys', keys.slice(0, 30));
-    const semanas = (payload as any).semanas;
-    const dias = (payload as any).dias;
-    console.log('[plan][active-plan] counts', {
-      semanas: Array.isArray(semanas) ? semanas.length : null,
-      dias: Array.isArray(dias) ? dias.length : null,
-    });
-  }
-
   const weeks = Array.isArray((payload as any).semanas) ? ((payload as any).semanas as NutritionPlanWeekApi[]) : [];
   const directDays = Array.isArray((payload as any).dias) ? ((payload as any).dias as NutritionPlanDayApi[]) : [];
 
-  const days = ensureUniqueTodayMealDayIds(
-    directDays.length > 0
-      ? directDays.map((day, index) => buildTodayMealDayFromPlanApi(day, index))
-      : collectPlanWeeksDays(weeks),
-  );
+  const resolveDayIso = (day: any): string | undefined =>
+    coerceToLocalIsoDateString(day?.dia?.fecha) ?? coerceToLocalIsoDateString(day?.fecha);
+
+  const pickActiveWeek = (allWeeks: NutritionPlanWeekApi[]) => {
+    if (allWeeks.length === 0) return null;
+
+    const todayIso = getLocalIsoDate();
+    const sortedWeeks = [...allWeeks].sort((a, b) => {
+      const startA = coerceToLocalIsoDateString((a as any).fecha_inicio_semana) ?? '';
+      const startB = coerceToLocalIsoDateString((b as any).fecha_inicio_semana) ?? '';
+      if (startA && startB) return startA.localeCompare(startB);
+      if (startA) return -1;
+      if (startB) return 1;
+      return 0;
+    });
+
+    const weekPointer = (payload as any).semana_actual ?? (payload as any).week_current ?? null;
+    const targetId = weekPointer && typeof weekPointer === 'object' ? (weekPointer as any).id_semana : undefined;
+    const targetNumber = weekPointer && typeof weekPointer === 'object' ? (weekPointer as any).numero : undefined;
+
+    const byId = typeof targetId !== 'undefined'
+      ? sortedWeeks.find((week) => String(week.id_semana ?? '') === String(targetId))
+      : undefined;
+    if (byId) return byId;
+
+    const byNumber = typeof targetNumber !== 'undefined'
+      ? sortedWeeks.find((week) => String(week.numero ?? '') === String(targetNumber))
+      : undefined;
+    if (byNumber) return byNumber;
+
+    const byDateRange = sortedWeeks.find((week) => {
+      const start = coerceToLocalIsoDateString((week as any).fecha_inicio_semana);
+      const end = coerceToLocalIsoDateString((week as any).fecha_fin_semana);
+      if (!start || !end) return false;
+      return start <= todayIso && todayIso <= end;
+    });
+    if (byDateRange) return byDateRange;
+
+    // Fallback: tomar la semana mÃ¡s cercana a hoy por fecha_inicio_semana.
+    const byContainedDay = sortedWeeks.find((week) => {
+      const days = Array.isArray((week as any).dias)
+        ? (week as any).dias
+        : Array.isArray((week as any).days)
+          ? (week as any).days
+          : [];
+      return days.some((day: any) => resolveDayIso(day) === todayIso);
+    });
+    if (byContainedDay) return byContainedDay;
+
+    const todayTime = new Date(`${todayIso}T12:00:00`).getTime();
+    let closest: NutritionPlanWeekApi | null = null;
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (const week of sortedWeeks) {
+      const start = coerceToLocalIsoDateString((week as any).fecha_inicio_semana);
+      if (!start) continue;
+      const diff = Math.abs(new Date(`${start}T12:00:00`).getTime() - todayTime);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        closest = week;
+      }
+    }
+
+    return closest ?? sortedWeeks[0];
+  };
+
+  const activeWeek = pickActiveWeek(weeks);
+  const activeWeekStart = activeWeek ? coerceToLocalIsoDateString((activeWeek as any).fecha_inicio_semana) : undefined;
+  const activeWeekEnd = activeWeek ? coerceToLocalIsoDateString((activeWeek as any).fecha_fin_semana) : undefined;
+
+  const activeWeekDays = activeWeek
+    ? (Array.isArray((activeWeek as any).dias) ? (activeWeek as any).dias : Array.isArray((activeWeek as any).days) ? (activeWeek as any).days : [])
+    : [];
+
+  const nextWeek = (() => {
+    if (!activeWeekStart || weeks.length === 0) return null;
+    const next = weeks
+      .map((week) => ({ week, start: coerceToLocalIsoDateString((week as any).fecha_inicio_semana) ?? '' }))
+      .filter((item) => item.start && item.start > activeWeekStart)
+      .sort((a, b) => a.start.localeCompare(b.start))[0];
+    return next?.week ?? null;
+  })();
+
+  const nextWeekDays = nextWeek
+    ? (Array.isArray((nextWeek as any).dias) ? (nextWeek as any).dias : Array.isArray((nextWeek as any).days) ? (nextWeek as any).days : [])
+    : [];
+
+  const allWeekDays = weeks
+    .filter((week): week is NutritionPlanWeekApi => Boolean(week) && typeof week === 'object')
+    .flatMap((week) => Array.isArray((week as any).dias) ? (week as any).dias : Array.isArray((week as any).days) ? (week as any).days : [])
+    .filter((day): day is NutritionPlanDayApi => Boolean(day) && typeof day === 'object');
+
+  const rawDays: NutritionPlanDayApi[] = activeWeekDays.length > 0
+    ? ([...(activeWeekDays as NutritionPlanDayApi[]), ...(nextWeekDays as NutritionPlanDayApi[])])
+    : directDays.length > 0
+      ? directDays
+      : allWeekDays;
+
+  // Fallback robusto: si no hay rango de semana, filtrar por la semana del dispositivo (Lun..Dom)
+  // usando la fecha real de cada día. Evita mezclar semanas no activas en el carrusel.
+  const todayIso = getLocalIsoDate();
+  const currentWeekStart = getWeekStartIsoMonday(todayIso);
+  const currentWeekEnd = getWeekEndIsoSunday(currentWeekStart);
+  const nextWeekStartDate = new Date(`${currentWeekStart}T12:00:00`);
+  nextWeekStartDate.setDate(nextWeekStartDate.getDate() + 7);
+  const nextWeekStart = getLocalIsoDate(nextWeekStartDate);
+  const nextWeekEnd = getWeekEndIsoSunday(nextWeekStart);
+
+  const windowStart = activeWeekStart ?? currentWeekStart;
+  const windowEnd =
+    coerceToLocalIsoDateString((nextWeek as any)?.fecha_fin_semana)
+    ?? activeWeekEnd
+    ?? nextWeekEnd;
+
+  const filteredRawDays = rawDays.filter((day) => {
+    const dateIso = resolveDayIso(day);
+    if (!dateIso) return true;
+    return windowStart <= dateIso && dateIso <= windowEnd;
+  });
+
+  const mappedDays = ensureUniqueTodayMealDayIds(filteredRawDays.map((day, index) => buildTodayMealDayFromPlanApi(day, index)));
+  const daysWithWeekend = fillMissingDaysWithWeekendBlocks(mappedDays);
+
+  // Fallback: si el filtro dejÃ³ la lista vacÃ­a por fechas mal formateadas, no bloqueamos la UI.
+  const days = daysWithWeekend.length > 0
+    ? daysWithWeekend
+    : ensureUniqueTodayMealDayIds(
+      (directDays.length > 0 ? directDays : allWeekDays).map((day, index) => buildTodayMealDayFromPlanApi(day, index)),
+    );
 
   const activeDay = pickActiveTodayMealDay(days);
   const meals = activeDay?.meals ?? [];
   const completedMeals = activeDay?.completedMeals ?? 0;
   const totalMeals = activeDay?.totalMeals ?? 0;
   const progressPct = activeDay?.progressPct ?? 0;
-
-  if (__DEV__) {
-    console.log('[plan][active-plan] days/meals', { days: days.length, meals: meals.length });
-  }
 
   const basePlan: TodayMealPlan = {
     days,
@@ -1614,8 +1801,8 @@ export async function loadTodayMealPlanFromActivePlan(): Promise<TodayMealPlan> 
   };
 
   try {
-    const dateIso = activeDay?.date ?? getLocalIsoDate();
-    const statusMap = await fetchMealTrackingStatusMapFromDashboard(dateIso);
+    const dateIsos = basePlan.days.map((day) => day.date ?? '').filter(Boolean) as string[];
+    const statusMap = await fetchMealTrackingStatusMapForDates(dateIsos.length > 0 ? dateIsos : [getLocalIsoDate()]);
     return overlayMealTrackingStatusMap(basePlan, statusMap);
   } catch {
     return basePlan;
